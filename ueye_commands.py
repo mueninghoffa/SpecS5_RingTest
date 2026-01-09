@@ -8,6 +8,10 @@ from typing import Any, Callable, Optional
 
 from pyueye import ueye
 
+from logging_config import get_logger
+
+logger = get_logger(__name__)
+
 
 class PyUeyeError(RuntimeError):
     """
@@ -123,3 +127,5 @@ get_camera_list = UeyeCommand(ueye.is_GetCameraList)
 set_camera_id = UeyeCommand(ueye.is_SetCameraID)
 # Using set_camera_id to get the current camera ID will result in a PyUeyeError
 #   use get_device_info or get_camera_list instead
+
+logger.info("ueye command wrappers instantiated")
