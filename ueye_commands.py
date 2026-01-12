@@ -54,11 +54,18 @@ class UeyeCommand:
     name : str
         Name of the function. Defaults to ``self.func.__name__`` if not
         initialized with a `name` supplied.
+    accept : callable
+        A predicate function for defining acceptable return values other
+        than `ueye.IS_SUCCESS`. Must have signature ``accept(int,
+        tuple[int, ...]) -> bool``, where the first argument is the value
+        returned by `func` and the second argument is the tuple of args
+        that `func` was called with.
 
     Raises
     ------
     `PyUeyeError`
-        Raised if the return value is not ``ueye.IS_SUCCESS`.`
+        Raised if the return value is not ``ueye.IS_SUCCESS`` and the
+        `accept` returns ``False``.
 
     Notes
     -----
@@ -150,9 +157,15 @@ def gain_accept(result: int, args: tuple[int, ...]) -> bool:
 
 def gamma_accept(result: int, args: tuple[int, ...]) -> bool:
     if args[1] == ueye.IS_GET_HW_GAMMA:
-        return isinstance(result, int) and result >= 0  # I think this is correct?
+        return result >= 0  # I think this is correct?
     if args[1] == ueye.IS_GET_HW_SUPPORTED_GAMMA:
         return result in (ueye.IS_SET_HW_GAMMA_ON, ueye.IS_SET_HW_GAMMA_OFF)
+    return False
+
+
+def camera_id_accept(result: int, args: tuple[int, ...]) -> bool:
+    if args[1] == ueye.IS_GET_CAMERA_ID and 1 <= result <= 254:
+        return True
     return False
 
 
@@ -172,19 +185,17 @@ get_camera_info = UeyeCommand(ueye.is_GetCameraInfo)
 get_sensor_info = UeyeCommand(ueye.is_GetSensorInfo)
 device_info = UeyeCommand(ueye.is_DeviceInfo)
 
-exposure_cmd = UeyeCommand(ueye.is_Exposure)
-pixel_clock_cmd = UeyeCommand(ueye.is_PixelClock)
-aoi_cmd = UeyeCommand(ueye.is_AOI)
+exposure = UeyeCommand(ueye.is_Exposure)
+pixel_clock = UeyeCommand(ueye.is_PixelClock)
+aoi = UeyeCommand(ueye.is_AOI)
 set_binning = UeyeCommand(ueye.is_SetBinning)
 
 get_number_of_cameras = UeyeCommand(ueye.is_GetNumberOfCameras)
 get_camera_list = UeyeCommand(ueye.is_GetCameraList)
-set_camera_id = UeyeCommand(ueye.is_SetCameraID)
-# Using set_camera_id to get the current camera ID will result in a PyUeyeError
-#   use get_device_info or get_camera_list instead
 
 # ---- Common commands that might return a value ----
 
+set_camera_id = UeyeCommand(ueye.is_SetCameraID, accept=camera_id_accept)
 set_hardware_gain = UeyeCommand(ueye.is_SetHardwareGain, accept=gain_accept)
 set_hardware_gamma = UeyeCommand(ueye.is_SetHardwareGamma, accept=gamma_accept)
 
