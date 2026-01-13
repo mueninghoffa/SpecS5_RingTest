@@ -96,9 +96,6 @@ def run() -> None:
     camera_ID = find_camera()
 
     with UeyeCamera(camera_ID) as camera:
-        logger.info(
-            f"Initialized camera model {camera.sensor_info["strSensorName"]} with camera ID {camera.camera_info["Select"]}"
-        )
         configure_camera(camera)
 
         camera.expose()

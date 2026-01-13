@@ -38,7 +38,10 @@ from ueye_commands import (
     set_image_mem,
 )
 
-UEYE_CAMERA_LIST: TypeAlias = ueye.UEYE_CAMERA_LIST  # type: ignore
+Ueye_Camera_List: TypeAlias = ueye.UEYE_CAMERA_LIST  # type: ignore
+Ueye_Color_Mode: TypeAlias = int
+Ueye_Auto_Param: TypeAlias = int
+
 
 logger = get_logger(__name__)
 
@@ -57,7 +60,7 @@ def number_of_cameras() -> int:
     return ctypes_to_normal(count)
 
 
-def list_cameras(struct: bool = False) -> list[dict[str, Any]] | UEYE_CAMERA_LIST:
+def list_cameras(struct: bool = False) -> list[dict[str, Any]] | Ueye_Camera_List:
     """
     Returns a list of camera info objects of connected cameras.
 
@@ -141,6 +144,11 @@ class UeyeCamera:
         self._last_exposure_time: Optional[str] = None
         self._image_available: Optional[ueye.c_uint] = None
 
+        logger.info(
+            f"Initialized camera model {self.sensor_info["strSensorName"]}"
+            + f"with camera ID {self.camera_info["Select"]}"
+        )
+
     # ---- Lifecycle ----
 
     def _connect(self) -> None:
@@ -148,7 +156,7 @@ class UeyeCamera:
         Initialize camera, set it to accept software triggers, and get sensor size.
         """
         if self._connected:
-            logger.debug("Attempted to connect to camera while already connected")
+            logger.warning("Attempted to connect to camera while already connected")
             return
 
         init_camera(self.handle, None)
@@ -244,6 +252,8 @@ class UeyeCamera:
             Indicates that no exceptions were handled.
         """
         _ = __, ___  # shut up pyright
+
+        logger.debug("Exited context")
         if self._connected:
             self.release_memory()
             self._close()
@@ -375,14 +385,14 @@ class UeyeCamera:
             value,
             ueye.sizeof(value),
         )
+        logger.debug(f"Exposure time set to {ms:.1f} ms")
 
         # verify framerate is reasonable
         fps = ueye.IS_GET_FRAMERATE
         newfps = ueye.double()
         set_frame_rate(self.handle, fps, newfps)
-        assert 1e-2 > abs(
-            (newfps * self.exposure_time_ms / 1e3) - 1
-        ), "Frame rate and exposure time do not match"
+        if 1e-2 > abs((newfps * self.exposure_time_ms / 1e3) - 1):
+            raise RuntimeError("Frame rate and exposure time do not match")
 
     @property
     def gain(self) -> int:
@@ -426,6 +436,7 @@ class UeyeCamera:
             ueye.IS_IGNORE_PARAMETER,
             ueye.IS_IGNORE_PARAMETER,
         )
+        logger.debug(f"Gain set to {value}")
 
     @property
     def pixel_clock(self) -> int:
@@ -501,6 +512,7 @@ class UeyeCamera:
         else:
             mode = ueye.IS_SET_HW_GAMMA_OFF
         set_hardware_gamma(self.handle, mode)
+        logger.debug(f"Gamma set to {active}")
 
     @property
     def color_mode(self) -> int:
@@ -538,6 +550,9 @@ class UeyeCamera:
         """
         set_color_mode(self.handle, mode)
         self._bits_per_pixel = set_color_mode(self.handle, ueye.IS_GET_BITS_PER_PIXEL)
+        logger.debug(
+            f"Color mode set to {mode}"
+        )  # should be updated to log literal name, not int
 
     # ---- Configuration (non-properties) ----
 
@@ -571,9 +586,12 @@ class UeyeCamera:
         try:
             pval = ueye.c_double(int(enable))
             set_auto_parameter(self.handle, setting, pval, pval)
+            logger.debug(f"Set auto parameter {setting} to {enable}")
         except PyUeyeError as e:
             if e.error_code == 155 and ignore_not_implemented:
-                logger.debug("Attempted to adjust unsupported auto-parameter setting")
+                logger.debug(
+                    f"Attempted to adjust unsupported auto-parameter setting {setting}"
+                )
                 return
             raise
 
@@ -652,8 +670,9 @@ class UeyeCamera:
         Uses a ueye wait event to wait for the image to be available in
         memory before continuing.
         """
-        assert self._image_available is not None
+        assert self._image_available is not None, "Image available event is not enabled"
 
+        logger.debug("Starting exposure")
         start = time.time()
         freeze_video(self.handle, ueye.IS_DONT_WAIT)
 
