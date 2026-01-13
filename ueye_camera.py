@@ -1,6 +1,5 @@
 """
 Functions and a class for interacting with uEye cameras through pyueye.
-Written in part by ChatGPT.
 """
 
 from __future__ import annotations
@@ -145,6 +144,9 @@ class UeyeCamera:
     # ---- Lifecycle ----
 
     def _connect(self) -> None:
+        """
+        Initialize camera, set it to accept software triggers, and get sensor size.
+        """
         if self._connected:
             logger.debug("Attempted to connect to camera while already connected")
             return
@@ -157,7 +159,10 @@ class UeyeCamera:
         self._connected = True
         logger.debug("Camera connected")
 
-    def _enable_trigger(self):
+    def _enable_trigger(self) -> None:
+        """
+        Initialize and enable the trigger for a new imagin being available.
+        """
         initwait = ueye.IS_INIT_EVENT()
         initwait.nEvent = ueye.UINT(ueye.IS_SET_EVENT_FRAME)
         initwait.bManualReset = ueye.BOOL(False)
@@ -173,6 +178,10 @@ class UeyeCamera:
         logger.debug("Software trigger event enabled")
 
     def reserve_memory(self) -> None:
+        """
+        Reserve memory for captured images.
+        """
+        assert self._connected, "Camera not initialized"
         assert self._mem_ptr.value is None, "Memory pointer already assigned"
         assert self._mem_id.value == 0, "Memory ID already assigned"
         alloc_image_mem(
@@ -187,6 +196,9 @@ class UeyeCamera:
         logger.debug("Camera memory reserved")
 
     def release_memory(self) -> None:
+        """
+        Release memory allocated to camera.
+        """
         if self._mem_ptr.value is None and self._mem_id.value == 0:
             logger.info("There is no memory to release")
 
@@ -196,6 +208,9 @@ class UeyeCamera:
         logger.debug("Camera memory released")
 
     def _close(self) -> None:
+        """
+        Close camera connection, if possible.
+        """
         if not self._connected:
             logger.warning("Cannot disconnect from an unconnected camera")
             return
@@ -206,12 +221,28 @@ class UeyeCamera:
         logger.debug("Camera disconnected")
         return
 
-    def __enter__(self):
+    def __enter__(self) -> UeyeCamera:
+        """
+        Connect to camera and enable image-available trigger.
+
+        Returns
+        -------
+        UeyeCamera=self
+        """
+        logger.debug("Entered context")
         self._connect()
         self._enable_trigger()
         return self
 
     def __exit__(self, _, __, ___) -> bool:
+        """
+        If camera is connected, release allocated memory and close camera.
+
+        Returns
+        -------
+        bool=False
+            Indicates that no exceptions were handled.
+        """
         _ = __, ___  # shut up pyright
         if self._connected:
             self.release_memory()
@@ -221,7 +252,15 @@ class UeyeCamera:
     # ---- Hardware Information ----
 
     @property
-    def device_info(self) -> dict:
+    def device_info(self) -> dict[str, Any]:
+        """
+        Get device info using `ueye.is_DeviceInfo`.
+
+        Returns
+        -------
+        dict
+            `ueye.IS_DEVICE_INFO` struct converted to a dict.
+        """
         info = ueye.IS_DEVICE_INFO()
         device_info(
             self.handle,
@@ -232,19 +271,43 @@ class UeyeCamera:
         return ctypes_to_normal(info)
 
     @property
-    def camera_info(self) -> dict:
+    def camera_info(self) -> dict[str, Any]:
+        """
+        Get camera info using `ueye.is_GetCameraInfo`.
+
+        Returns
+        -------
+        dict
+            `ueye.CAMINFO` struct converted to dict.
+        """
         info = ueye.CAMINFO()
         get_camera_info(self.handle, info)
         return ctypes_to_normal(info)
 
     @property
-    def sensor_info(self) -> dict:
+    def sensor_info(self) -> dict[str, Any]:
+        """
+        Get sensor info using `ueye.is_GetSensorInfo`.
+
+        Returns
+        -------
+        dict
+            `ueye.SENSORINFO` struct converted to dict.
+        """
         info = ueye.SENSORINFO()
         get_sensor_info(self.handle, info)
         return ctypes_to_normal(info)
 
     @property
-    def pixel_clock_possible_values(self) -> list:
+    def pixel_clock_possible_values(self) -> list[float]:
+        """
+        Get camera's possible pixel clock values.
+
+        Returns
+        -------
+        list of floats
+            List containing the valid pixel clock values in MegaHertz (MHz).
+        """
         num_clocks = ueye.uint()
         pixel_clock(
             self.handle,
@@ -262,6 +325,14 @@ class UeyeCamera:
 
     @property
     def exposure_time_ms(self) -> float:
+        """
+        Get the exposure time in milliseconds (ms).
+
+        Returns
+        -------
+        float
+            Current exposure time in ms.
+        """
         value = ueye.double()
         exposure(
             self.handle,
@@ -272,7 +343,23 @@ class UeyeCamera:
         return ctypes_to_normal(value)
 
     @exposure_time_ms.setter
-    def exposure_time_ms(self, ms: float):
+    def exposure_time_ms(self, ms: float) -> None:
+        """
+        Set the exposure time in milliseconds (ms).
+
+        Verifies that the framerate is adjusted to be consistent. Enables
+        long exposures if necessary (>1s).
+
+        Parameters
+        ----------
+        ms : float
+            New exposure time in ms.
+
+        Raises
+        ------
+        RuntimeError
+            Raised if the framerate and exposure time are not compatible.
+        """
         if ms >= 1e3:
             enable = ueye.c_uint(1)
             exposure(
@@ -299,6 +386,16 @@ class UeyeCamera:
 
     @property
     def gain(self) -> int:
+        """
+        Get the current master gain setting.
+
+        Does not get the individual color (rgb) gain settings.
+
+        Returns
+        -------
+        int
+            Current gain setting.
+        """
         mode = ueye.IS_GET_MASTER_GAIN
         ret = set_hardware_gain(
             self.handle,
@@ -310,10 +407,21 @@ class UeyeCamera:
         return ret
 
     @gain.setter
-    def gain(self, value: int):
+    def gain(self, value: int) -> None:
+        """
+        Set the master gain.
+
+        Cannot be used to set the individual color (rgb) gain settings.
+
+        Parameters
+        ----------
+        value : int
+            New master gain value.
+        """
+        val = ueye.uint(value)
         set_hardware_gain(
             self.handle,
-            value,
+            val,
             ueye.IS_IGNORE_PARAMETER,
             ueye.IS_IGNORE_PARAMETER,
             ueye.IS_IGNORE_PARAMETER,
@@ -321,27 +429,73 @@ class UeyeCamera:
 
     @property
     def pixel_clock(self) -> int:
-        return 0
+        """
+        Get the current pixel clock value.
+
+        Returns
+        -------
+        int
+            Current pixel clock in MegaHertz (MHz).
+        """
+        value = ueye.uint()
+        pixel_clock(self.handle, ueye.IS_PIXELCLOCK_CMD_GET, value, ueye.sizeof(value))
+        return ctypes_to_normal(value)
 
     @pixel_clock.setter
-    def pixel_clock(self, mhz: int):
+    def pixel_clock(self, mhz: int) -> None:
+        """
+        Set the pixel clock value.
+
+        Parameters
+        ----------
+        mhz : int
+            New pixel clock setting in MegaHertz (MHz).
+        """
         value = ueye.int(mhz)
         pixel_clock(
             self.handle,
             ueye.IS_PIXELCLOCK_CMD_SET,
             value,
             ueye.sizeof(value),
-            camera_handle=self.handle,
         )
+
+        actual_value = ueye.INT()
+        pixel_clock(
+            self.handle,
+            ueye.IS_PIXELCLOCK_CMD_GET,
+            actual_value,
+            ueye.sizeof(actual_value),
+        )
+        logger.debug(f"Pixel clock set to {actual_value} MHz")
+        if actual_value != value:
+            logger.warning(
+                f"Pixel clock was set to {actual_value} instead of requested value {value}"
+            )
 
     @property
     def gamma(self) -> bool:
+        """
+        Whether gamma correction (white balance) is enabled.
+
+        Returns
+        -------
+        bool
+            Hardware gamma setting.
+        """
         mode = ueye.IS_GET_HW_GAMMA
         ret = set_hardware_gamma(self.handle, mode)
         return bool(ret)
 
     @gamma.setter
-    def gamma(self, active: bool):
+    def gamma(self, active: bool) -> None:
+        """
+        Enable or disable gamma correction (white balance).
+
+        Parameters
+        ----------
+        active : bool
+            New hardware gamma setting.
+        """
         if active:
             mode = ueye.IS_SET_HW_GAMMA_ON
         else:
@@ -350,18 +504,70 @@ class UeyeCamera:
 
     @property
     def color_mode(self) -> int:
+        """
+        Get the current color mode.
+
+        Returns
+        -------
+        int
+            Corresponds to a color mode.
+
+        Notes
+        -----
+        Should be updated to return string of color mode.
+        """
         return set_color_mode(self.handle, ueye.IS_GET_COLOR_MODE)
 
     @color_mode.setter
-    def color_mode(self, mode: int):
+    def color_mode(self, mode: Ueye_Color_Mode) -> None:
+        """
+        Set the color mode.
+
+        Parameters
+        ----------
+        mode : valid ueye color mode
+            A `ueye` constant corresponding to the desired color mode.
+            Some common color modes are :
+
+            *``ueye.IS_CM_MONO8``
+            *``ueye.IS_BGR8_PACKED``
+            *``ueye.IS_CM_SENSOR_RAW12``
+
+            See the `uEye <https://www.1stvision.com/cameras/IDS/IDS-manuals/uEye_Manual/is_setcolormode.html>`
+            documentation for the full list.
+        """
         set_color_mode(self.handle, mode)
         self._bits_per_pixel = set_color_mode(self.handle, ueye.IS_GET_BITS_PER_PIXEL)
 
     # ---- Configuration (non-properties) ----
 
     def _autoparam(
-        self, setting: int, enable: bool, ignore_not_implemented: bool = False
-    ):
+        self,
+        setting: Ueye_Auto_Param,
+        enable: bool,
+        ignore_not_implemented: bool = False,
+    ) -> None:
+        """
+        Enable or disable an auto parameter.
+
+        Parameters
+        ----------
+        setting : `ueye.uint`
+            Ueye constant corresponding to the auto parameter being set.
+            Some common parameters are:
+
+            *``ueye.IS_SET_ENABLE_AUTO_GAIN``
+            *``ueye.IS_SET_ENABLE_AUTO_SHUTTER``
+            *``ueye.IS_SET_ENABLE_AUTO_FRAMERATE``
+
+            See the `uEye <https://www.1stvision.com/cameras/IDS/IDS-manuals/uEye_Manual/is_setautoparameter.html>`
+            documentation for the full list.
+        enable : bool
+            When to enable (``True``) or disable (``False``) the auro parameter.
+        ignore_not_implemented : bool, default=True
+            If ``True`` (default), then a `PyUeyeError` will not be raised
+            if `setting` is not available on the camera model.
+        """
         try:
             pval = ueye.c_double(int(enable))
             set_auto_parameter(self.handle, setting, pval, pval)
@@ -371,7 +577,21 @@ class UeyeCamera:
                 return
             raise
 
-    def auto_parameters(self, params: dict[str, bool]):
+    def auto_parameters(self, params: dict[str, bool]) -> None:
+        """
+        Enable or disable the auto parameter settings for gain, shutter
+        (exposure time), white balance (gamma), and frame rate.
+
+        Parameters
+        ----------
+        params : dict of string-keyed bools
+            Dict of key-value pairs for the auto parameters. Values must be
+            bools. Valid keys:
+                *"gain"
+                *"shutter"
+                *"white_balance"
+                *"frame_rate"
+        """
         valid_auto_params = {"gain", "shutter", "white_balance", "frame_rate"}
         assert set(params.keys()).issubset(
             valid_auto_params
@@ -428,6 +648,9 @@ class UeyeCamera:
     def expose(self) -> None:
         """
         Triggers a single software exposure.
+
+        Uses a ueye wait event to wait for the image to be available in
+        memory before continuing.
         """
         assert self._image_available is not None
 
@@ -452,6 +675,11 @@ class UeyeCamera:
     def read_numpy(self) -> np.ndarray:
         """
         Reads the most recently exposed image as a NumPy array.
+
+        Returns
+        -------
+        np.ndarray
+            Numpy array of pixel data in the same shape as the sensor.
         """
         assert isinstance(self._width, int)
         assert isinstance(self._height, int)
