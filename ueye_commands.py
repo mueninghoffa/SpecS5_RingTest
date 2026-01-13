@@ -169,13 +169,62 @@ def camera_id_accept(result: int, args: tuple[int, ...]) -> bool:
     return False
 
 
+def color_mode_accept(result: int, args: tuple[int, ...]) -> bool:
+    valid_modes = {
+        ueye.IS_CM_BGR10_PACKED,
+        ueye.IS_CM_BGR10_UNPACKED,
+        ueye.IS_CM_BGR12_UNPACKED,
+        ueye.IS_CM_BGR565_PACKED,
+        ueye.IS_CM_BGR5_PACKED,
+        ueye.IS_CM_BGR8_PACKED,
+        ueye.IS_CM_BGRA12_UNPACKED,
+        ueye.IS_CM_BGRA8_PACKED,
+        ueye.IS_CM_BGRY8_PACKED,
+        ueye.IS_CM_CBYCRY_PACKED,
+        ueye.IS_CM_FORMAT_MASK,
+        ueye.IS_CM_FORMAT_PLANAR,
+        ueye.IS_CM_JPEG,
+        ueye.IS_CM_MODE_MASK,
+        ueye.IS_CM_MONO10,
+        ueye.IS_CM_MONO12,
+        ueye.IS_CM_MONO16,
+        ueye.IS_CM_MONO8,
+        ueye.IS_CM_ORDER_BGR,
+        ueye.IS_CM_ORDER_MASK,
+        ueye.IS_CM_ORDER_RGB,
+        ueye.IS_CM_PREFER_PACKED_SOURCE_FORMAT,
+        ueye.IS_CM_RGB10_PACKED,
+        ueye.IS_CM_RGB10_UNPACKED,
+        ueye.IS_CM_RGB12_UNPACKED,
+        ueye.IS_CM_RGB8_PACKED,
+        ueye.IS_CM_RGB8_PLANAR,
+        ueye.IS_CM_RGBA12_UNPACKED,
+        ueye.IS_CM_RGBA8_PACKED,
+        ueye.IS_CM_RGBY8_PACKED,
+        ueye.IS_CM_SENSOR_RAW10,
+        ueye.IS_CM_SENSOR_RAW12,
+        ueye.IS_CM_SENSOR_RAW16,
+        ueye.IS_CM_SENSOR_RAW8,
+        ueye.IS_CM_UYVY_BAYER_PACKED,
+        ueye.IS_CM_UYVY_MONO_PACKED,
+        ueye.IS_CM_UYVY_PACKED,
+    }
+    if args[1] == ueye.IS_GET_COLOR_MODE:
+        return result in valid_modes
+
+    if args[1] == ueye.IS_GET_BITS_PER_PIXEL:
+        return result > 0
+    return False
+
+
 # ---- Common commands that only return status ----
 
 init_camera = UeyeCommand(ueye.is_InitCamera)
 exit_camera = UeyeCommand(ueye.is_ExitCamera)
 
-set_software_trigger = UeyeCommand(ueye.is_SetExternalTrigger)
-force_trigger = UeyeCommand(ueye.is_ForceTrigger)
+event = UeyeCommand(ueye.is_Event)
+set_external_trigger = UeyeCommand(ueye.is_SetExternalTrigger)
+freeze_video = UeyeCommand(ueye.is_FreezeVideo)
 
 alloc_image_mem = UeyeCommand(ueye.is_AllocImageMem)
 free_image_mem = UeyeCommand(ueye.is_FreeImageMem)
@@ -186,9 +235,11 @@ get_sensor_info = UeyeCommand(ueye.is_GetSensorInfo)
 device_info = UeyeCommand(ueye.is_DeviceInfo)
 
 exposure = UeyeCommand(ueye.is_Exposure)
+set_frame_rate = UeyeCommand(ueye.is_SetFrameRate)
 pixel_clock = UeyeCommand(ueye.is_PixelClock)
 aoi = UeyeCommand(ueye.is_AOI)
 set_binning = UeyeCommand(ueye.is_SetBinning)
+set_auto_parameter = UeyeCommand(ueye.is_SetAutoParameter)
 
 get_number_of_cameras = UeyeCommand(ueye.is_GetNumberOfCameras)
 get_camera_list = UeyeCommand(ueye.is_GetCameraList)
@@ -198,6 +249,4 @@ get_camera_list = UeyeCommand(ueye.is_GetCameraList)
 set_camera_id = UeyeCommand(ueye.is_SetCameraID, accept=camera_id_accept)
 set_hardware_gain = UeyeCommand(ueye.is_SetHardwareGain, accept=gain_accept)
 set_hardware_gamma = UeyeCommand(ueye.is_SetHardwareGamma, accept=gamma_accept)
-
-
-logger.info("ueye command wrappers instantiated")
+set_color_mode = UeyeCommand(ueye.is_SetColorMode, accept=color_mode_accept)
