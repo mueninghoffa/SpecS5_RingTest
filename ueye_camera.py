@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import ctypes
 import time
-from typing import Any, Optional
+from typing import Any, Optional, TypeAlias
 
 import numpy as np
 from astropy.io import fits
@@ -38,7 +38,8 @@ from ueye_commands import (
     set_hardware_gamma,
     set_image_mem,
 )
-from ueye_types import UEYE_CAMERA_LIST
+
+UEYE_CAMERA_LIST: TypeAlias = ueye.UEYE_CAMERA_LIST  # type: ignore
 
 logger = get_logger(__name__)
 
@@ -211,6 +212,7 @@ class UeyeCamera:
         return self
 
     def __exit__(self, _, __, ___) -> bool:
+        _ = __, ___  # shut up pyright
         if self._connected:
             self.release_memory()
             self._close()
