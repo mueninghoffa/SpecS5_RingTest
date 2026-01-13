@@ -15,7 +15,7 @@ logger = get_logger(__name__)
 
 Predicate = Callable[[int, tuple[int, ...]], bool]
 
-with open("./ueye_constans.yaml", "r") as stream:
+with open("./ueye_constants.yaml", "r") as stream:
     ueye_constants = yaml.safe_load(stream)
 
 

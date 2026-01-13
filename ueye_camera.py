@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import ctypes
 import time
+from datetime import datetime
+from pathlib import Path
 from typing import Any, Optional, TypeAlias
 
 import numpy as np
@@ -130,8 +132,9 @@ class UeyeCamera:
         Disconnect from camera and free allocated memory.
     """
 
-    def __init__(self, camera_id: int) -> None:
+    def __init__(self, camera_id: int, base_dir: str = "./ueye_fits_images") -> None:
         self.handle = ueye.HIDS(camera_id)
+        self.base_dir = Path(base_dir)
 
         self._mem_ptr = ueye.c_mem_p()
         self._mem_id = ueye.int()
@@ -139,21 +142,19 @@ class UeyeCamera:
         self._width: Optional[int] = None
         self._height: Optional[int] = None
         self._bits_per_pixel: Optional[int] = None
+        self._serial_no: Optional[int] = None
 
         self._connected = False
-        self._last_exposure_time: Optional[str] = None
+        self._last_exposure_time: Optional[datetime] = None
         self._image_available: Optional[ueye.c_uint] = None
-
-        logger.info(
-            f"Initialized camera model {self.sensor_info["strSensorName"]}"
-            + f"with camera ID {self.camera_info["Select"]}"
-        )
+        self._image_counter = 0
 
     # ---- Lifecycle ----
 
     def _connect(self) -> None:
         """
-        Initialize camera, set it to accept software triggers, and get sensor size.
+        Initialize camera, set it to accept software triggers, and get
+        sensor size and serial number.
         """
         if self._connected:
             logger.warning("Attempted to connect to camera while already connected")
@@ -163,9 +164,13 @@ class UeyeCamera:
         set_external_trigger(self.handle, ueye.IS_SET_TRIGGER_SOFTWARE)
         self._width = self.sensor_info["nMaxWidth"]
         self._height = self.sensor_info["nMaxHeight"]
+        self._serial_no = int(self.camera_info["SerNo"])
 
         self._connected = True
-        logger.debug("Camera connected")
+        logger.info(
+            f"Initialized camera model {self.sensor_info["strSensorName"]}"
+            + f"with camera ID {self.camera_info["Select"]}"
+        )
 
     def _enable_trigger(self) -> None:
         """
@@ -391,7 +396,7 @@ class UeyeCamera:
         fps = ueye.IS_GET_FRAMERATE
         newfps = ueye.double()
         set_frame_rate(self.handle, fps, newfps)
-        if 1e-2 > abs((newfps * self.exposure_time_ms / 1e3) - 1):
+        if 1e-2 < abs((newfps * self.exposure_time_ms / 1e3) - 1):
             raise RuntimeError("Frame rate and exposure time do not match")
 
     @property
@@ -673,6 +678,7 @@ class UeyeCamera:
         assert self._image_available is not None, "Image available event is not enabled"
 
         logger.debug("Starting exposure")
+        self._last_exposure_time = datetime.now()
         start = time.time()
         freeze_video(self.handle, ueye.IS_DONT_WAIT)
 
@@ -712,24 +718,22 @@ class UeyeCamera:
 
     # ---- FITS ----
 
-    def _build_fits_header(self) -> fits.Header:
+    def _generate_fits_header(self) -> fits.Header:
         """
         Constructs a FITS header containing IDS camera metadata.
         """
-        cam_info = ueye.CAMINFO()
-        get_camera_info(self.handle, cam_info)
-
-        sensor_info = ueye.SENSORINFO()
-        get_sensor_info(self.handle, sensor_info)
+        camera_info = self.camera_info
+        sensor_info = self.sensor_info
+        device_info = self.device_info
 
         header = fits.Header()
-        header["CAMERA"] = "IDS uEye"
-        header["MODEL"] = cam_info.Model.decode().strip()
-        header["SERIAL"] = cam_info.SerNo.decode().strip()
-        header["EXPTIME"] = self.exposure_time_ms / 1000.0
-        header["WIDTH"] = self._width.value
-        header["HEIGHT"] = self._height.value
-        header["BITPIX"] = self._bits_per_pixel.value
+        # header["CAMERA"] = "IDS uEye"
+        # header["MODEL"] = cam_info.Model.decode().strip()
+        # header["SERIAL"] = cam_info.SerNo.decode().strip()
+        # header["EXPTIME"] = self.exposure_time_ms / 1000.0
+        # header["WIDTH"] = self._width.value
+        # header["HEIGHT"] = self._height.value
+        # header["BITPIX"] = self._bits_per_pixel.value
 
         return header
 
@@ -738,12 +742,35 @@ class UeyeCamera:
         Returns the most recent image as a FITS ImageHDU.
         """
         data = self.read_numpy()
-        header = self._build_fits_header()
+        header = self._generate_fits_header()
         return fits.ImageHDU(data=data, header=header)
 
-    def save_fits(self, filename: str, overwrite: bool = False) -> None:
+    def save_fits(self, suffix: Optional[str] = None, overwrite: bool = False) -> Path:
         """
         Saves the most recent image to a FITS file.
         """
-        hdulist = fits.HDUList([fits.PrimaryHDU(), self.read_hdu()])
-        hdulist.writeto(filename, overwrite=overwrite)
+        self._image_counter += 1
+
+        now = self._last_exposure_time
+        assert now is not None
+        date_str = now.strftime("%Y%m%d")
+        date_time_str = now.strftime("%Y%m%d_%H%M%S")
+
+        day_cam_folder = self.base_dir / f"{date_str}_{self._serial_no}"
+
+        if suffix:
+            save_folder = day_cam_folder / suffix
+            filename = f"{date_time_str}_{suffix}_{self._image_counter:04d}.fits"
+        else:
+            save_folder = day_cam_folder
+            filename = f"{date_time_str}_{self._image_counter:04d}.fits"
+
+        save_folder.mkdir(
+            parents=True, exist_ok=True
+        )  # creates parent folders if needed
+        full_path = save_folder / filename
+        hdu = self.read_hdu()
+        hdu.writeto(full_path, overwrite=overwrite)
+
+        logger.info(f"Saved {full_path} with overwrite: {overwrite}")
+        return full_path

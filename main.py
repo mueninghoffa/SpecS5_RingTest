@@ -81,7 +81,7 @@ def configure_camera(camera: UeyeCamera) -> None:
     camera.color_mode = color_mode
     camera.gain = camera_settings["gain"]
     if camera_settings["pixel_clock"].lower() == "min":
-        pixel_clock = min(camera.pixel_clock_possible_values)
+        pixel_clock = int(min(camera.pixel_clock_possible_values))
     else:
         pixel_clock = camera_settings["pixel_clock"]
     camera.pixel_clock = pixel_clock
@@ -102,7 +102,9 @@ def run() -> None:
         img = camera.read_numpy()
         plt.imshow(img)
         plt.colorbar()
-        plt.show(block=True)
+        plt.show(block=False)
+
+        _ = camera.save_fits()
 
 
 if __name__ == "__main__":
