@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Optional, cast
 
+import yaml
 from pyueye import ueye
 
 from logging_config import get_logger
@@ -13,6 +14,9 @@ from logging_config import get_logger
 logger = get_logger(__name__)
 
 Predicate = Callable[[int, tuple[int, ...]], bool]
+
+with open("./ueye_constans.yaml", "r") as stream:
+    ueye_constants = yaml.safe_load(stream)
 
 
 class PyUeyeError(RuntimeError):
@@ -140,16 +144,7 @@ class UeyeCommand:
 
 
 def gain_accept(result: int, args: tuple[int, ...]) -> bool:
-    getters = {
-        ueye.IS_GET_MASTER_GAIN,
-        ueye.IS_GET_RED_GAIN,
-        ueye.IS_GET_GREEN_GAIN,
-        ueye.IS_GET_BLUE_GAIN,
-        ueye.IS_GET_DEFAULT_MASTER,
-        ueye.IS_GET_DEFAULT_RED,
-        ueye.IS_GET_DEFAULT_GREEN,
-        ueye.IS_GET_DEFAULT_BLUE,
-    }
+    getters = ueye_constants["gain_getters"]
     if args[1] in getters:
         return 0 <= result <= 100
     return False
@@ -170,50 +165,13 @@ def camera_id_accept(result: int, args: tuple[int, ...]) -> bool:
 
 
 def color_mode_accept(result: int, args: tuple[int, ...]) -> bool:
-    valid_modes = {
-        ueye.IS_CM_BGR10_PACKED,
-        ueye.IS_CM_BGR10_UNPACKED,
-        ueye.IS_CM_BGR12_UNPACKED,
-        ueye.IS_CM_BGR565_PACKED,
-        ueye.IS_CM_BGR5_PACKED,
-        ueye.IS_CM_BGR8_PACKED,
-        ueye.IS_CM_BGRA12_UNPACKED,
-        ueye.IS_CM_BGRA8_PACKED,
-        ueye.IS_CM_BGRY8_PACKED,
-        ueye.IS_CM_CBYCRY_PACKED,
-        ueye.IS_CM_FORMAT_MASK,
-        ueye.IS_CM_FORMAT_PLANAR,
-        ueye.IS_CM_JPEG,
-        ueye.IS_CM_MODE_MASK,
-        ueye.IS_CM_MONO10,
-        ueye.IS_CM_MONO12,
-        ueye.IS_CM_MONO16,
-        ueye.IS_CM_MONO8,
-        ueye.IS_CM_ORDER_BGR,
-        ueye.IS_CM_ORDER_MASK,
-        ueye.IS_CM_ORDER_RGB,
-        ueye.IS_CM_PREFER_PACKED_SOURCE_FORMAT,
-        ueye.IS_CM_RGB10_PACKED,
-        ueye.IS_CM_RGB10_UNPACKED,
-        ueye.IS_CM_RGB12_UNPACKED,
-        ueye.IS_CM_RGB8_PACKED,
-        ueye.IS_CM_RGB8_PLANAR,
-        ueye.IS_CM_RGBA12_UNPACKED,
-        ueye.IS_CM_RGBA8_PACKED,
-        ueye.IS_CM_RGBY8_PACKED,
-        ueye.IS_CM_SENSOR_RAW10,
-        ueye.IS_CM_SENSOR_RAW12,
-        ueye.IS_CM_SENSOR_RAW16,
-        ueye.IS_CM_SENSOR_RAW8,
-        ueye.IS_CM_UYVY_BAYER_PACKED,
-        ueye.IS_CM_UYVY_MONO_PACKED,
-        ueye.IS_CM_UYVY_PACKED,
-    }
+    valid_modes = ueye_constants["valid_color_modes"]
     if args[1] == ueye.IS_GET_COLOR_MODE:
         return result in valid_modes
 
     if args[1] == ueye.IS_GET_BITS_PER_PIXEL:
-        return result > 0
+        # this could be better defined
+        return result > 0 and result % 2 == 0
     return False
 
 
