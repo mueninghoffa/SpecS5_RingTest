@@ -1,14 +1,12 @@
----
 camera_ID: 2
 camera_model: UI306xCP-M
 settings:
-  color_mode: IS_CM_SENSOR_RAW12
-  exposure_time: 2000 # ms
-  pixel_clock: min
-  gain: 1
-  auto_params:
-    frame_rate: false
-    shutter: false
-    white_balance: false
-    gain: false
-...
+    color_mode: IS_CM_SENSOR_RAW12
+    exposure_time: 2000 # ms
+    pixel_clock: min
+    gain: 1
+    auto_params:
+        frame_rate: false
+        shutter: false
+        white_balance: false
+        gain: false
