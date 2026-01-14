@@ -3,5 +3,6 @@ __pycache__/
 
 Images/
 log_output.txt
+log_images/
 ueye_fits_images/
 ueye_dark_library/
