@@ -34,7 +34,6 @@ from ueye_commands import (
     set_auto_parameter,
     set_color_mode,
     set_external_trigger,
-    set_frame_rate,
     set_hardware_gain,
     set_hardware_gamma,
     set_image_mem,
@@ -132,9 +131,16 @@ class UeyeCamera:
         Disconnect from camera and free allocated memory.
     """
 
-    def __init__(self, camera_id: int, base_dir: str = "./ueye_fits_images") -> None:
+    def __init__(
+        self,
+        camera_id: int,
+        base_dir: str = "./ueye_fits_images",
+        dark_library: str = "./ueye_dark_library",
+    ) -> None:
         self.handle = ueye.HIDS(camera_id)
         self.base_dir = Path(base_dir)
+        self.dark_library = Path(dark_library)
+        self._darks = dict()
 
         self._mem_ptr = ueye.c_mem_p()
         self._mem_id = ueye.int()
@@ -165,6 +171,7 @@ class UeyeCamera:
         self._width = self.sensor_info["nMaxWidth"]
         self._height = self.sensor_info["nMaxHeight"]
         self._serial_no = int(self.camera_info["SerNo"])
+        self.dark_library = self.dark_library / f"{self._serial_no}"
 
         self._connected = True
         logger.info(
@@ -172,9 +179,9 @@ class UeyeCamera:
             + f"with camera ID {self.camera_info["Select"]}"
         )
 
-    def _enable_trigger(self) -> None:
+    def _enable_frame_event(self) -> None:
         """
-        Initialize and enable the trigger for a new imagin being available.
+        Initialize and enable the wait event for a new image being available.
         """
         initwait = ueye.IS_INIT_EVENT()
         initwait.nEvent = ueye.UINT(ueye.IS_SET_EVENT_FRAME)
@@ -244,7 +251,7 @@ class UeyeCamera:
         """
         logger.debug("Entered context")
         self._connect()
-        self._enable_trigger()
+        self._enable_frame_event()
         return self
 
     def __exit__(self, _, __, ___) -> bool:
@@ -363,7 +370,7 @@ class UeyeCamera:
         Set the exposure time in milliseconds (ms).
 
         Verifies that the framerate is adjusted to be consistent. Enables
-        long exposures if necessary (>1s).
+        long exposures as necessary (>1s).
 
         Parameters
         ----------
@@ -374,15 +381,24 @@ class UeyeCamera:
         ------
         RuntimeError
             Raised if the framerate and exposure time are not compatible.
+
+        Notes
+        -----
+        The
         """
-        if ms >= 1e3:
+        if ms > 1e3:
             enable = ueye.c_uint(1)
-            exposure(
-                self.handle,
-                ueye.IS_EXPOSURE_CMD_SET_LONG_EXPOSURE_ENABLE,
-                enable,
-                ueye.sizeof(enable),
-            )
+        else:
+            enable = ueye.c_uint(0)
+        exposure(
+            self.handle,
+            ueye.IS_EXPOSURE_CMD_SET_LONG_EXPOSURE_ENABLE,
+            enable,
+            ueye.sizeof(enable),
+        )
+        # Have to re-enable event after going in/out of long exposure mode
+        self._enable_frame_event()
+
         value = ueye.double(ms)
         exposure(
             self.handle,
@@ -390,14 +406,15 @@ class UeyeCamera:
             value,
             ueye.sizeof(value),
         )
-        logger.debug(f"Exposure time set to {ms:.1f} ms")
 
-        # verify framerate is reasonable
-        fps = ueye.IS_GET_FRAMERATE
-        newfps = ueye.double()
-        set_frame_rate(self.handle, fps, newfps)
-        if 1e-2 < abs((newfps * self.exposure_time_ms / 1e3) - 1):
-            raise RuntimeError("Frame rate and exposure time do not match")
+        # warn if actual exposure time is far from requested
+        if 0.1 < abs((ms - self.exposure_time_ms) / ms):
+            logger.warning(
+                f"Exposure time set to {self.exposure_time_ms:.3f},"
+                + f" more than 10% different from requested value of {ms:.3f}"
+            )
+
+        logger.debug(f"Exposure time set to {self.exposure_time_ms:.3f} ms")
 
     @property
     def gain(self) -> int:
@@ -675,6 +692,7 @@ class UeyeCamera:
         Uses a ueye wait event to wait for the image to be available in
         memory before continuing.
         """
+
         assert self._image_available is not None, "Image available event is not enabled"
 
         logger.debug("Starting exposure")
@@ -685,7 +703,7 @@ class UeyeCamera:
         wait_for_img = ueye.IS_WAIT_EVENT()
         wait_for_img.nEvent = self._image_available
         wait_for_img.nTimeoutMilliseconds = ueye.UINT(
-            round(self.exposure_time_ms * 1.1)
+            round(max(self.exposure_time_ms * 1.1, self.exposure_time_ms + 300))
         )
         event(
             self.handle,
@@ -695,12 +713,126 @@ class UeyeCamera:
         )
         end = time.time()
         elapsed = end - start
-        logger.info(f"Sensor exposed for {elapsed:.2f} seconds")
+        logger.debug(f"Took image in {elapsed:.2f} seconds")
+        # This log message is not the exposure time
 
-    def read_numpy(self) -> np.ndarray:
+    def _get_dark(self) -> np.ndarray | None:
+        """
+        Get the master dark for the current exposure time.
+
+        Returns
+        -------
+        np.ndarray or None
+            Master dark image data in a numpy array, if it exists.
+            Otherwise, returns ``None``.
+        """
+        if self.exposure_time_ms in self._darks.keys():
+            return self._darks[self.exposure_time_ms]
+
+        logger.debug(
+            f"Looking for {self.exposure_time_ms}ms darks in {self.dark_library}"
+        )
+        pattern = f"*_dark_{int(self.exposure_time_ms):05d}ms.fits"
+        candidates = list(self.dark_library.glob(pattern))
+
+        if not candidates:
+            logger.warning(f"No darks found for {self.exposure_time_ms}ms")
+            return None
+
+        candidates.sort()
+        # fmt: off
+        dark = fits.open(candidates[-1])[0].data.astype(np.int16)  # pyright: ignore reportAttributeAccessIssue
+        # fmt: on
+
+        self._darks[self.exposure_time_ms] = dark
+        logger.debug(f"Loaded dark {dark}")
+        return dark
+
+    def generate_dark(self, n: int = 11) -> Path:
+        """
+        Generate a master dark by taking the median over `n` images.
+
+        Parameters
+        ----------
+        n : int, default=11
+            How many dark images to take and combine into a master dark.
+            Default to odd number of images to prevent non-integer values.
+
+        Returns
+        -------
+        `pathlib.Path`
+            Path to the master dark in the dark library.
+        """
+        logger.info(
+            f"Taking {n} {int(self.exposure_time_ms)}ms dark exposures. Keep sensor covered!"
+        )
+
+        darks = []
+        for _ in range(n):
+            self.expose()
+            darks.append(self.read_numpy(subtract=False))
+        logger.info(f"Done taking {int(self.exposure_time_ms)}ms darks")
+        darks = np.array(darks)
+        master_dark = np.median(darks, axis=0)
+
+        self.dark_library.mkdir(parents=True, exist_ok=True)
+
+        now = datetime.now()
+        date_time_str = now.strftime("%Y%m%d_%H%M%S")
+        filename = f"{date_time_str}_dark_{int(self.exposure_time_ms):05d}ms.fits"
+        full_path = self.dark_library / filename
+        hdu = fits.PrimaryHDU(master_dark)  # TO ADD: comprehensive header
+        hdu.writeto(full_path, overwrite=True)
+
+        logger.info(f"Saved {full_path}")
+        return full_path
+
+    def generate_standard_darks(self, long: bool = False) -> None:
+        """
+        Generate darks for a set of standard exposure times.
+
+        Always generates darks for the following exposure times (ms):
+            1, 3, 5, 10, 20, 30, 50, 100, 200, 300, 500, 1000
+        If `long` is set to ``True``, the darks are also generated for
+        these exposure times (s):
+            1, 2, 3, 5, 10, 20, 30
+        """
+        original_exposure_time = self.exposure_time_ms
+        exposure_times = (1, 3, 5, 10, 20, 30, 50, 100, 200, 300, 500, 1000)  # ms
+        long_exposure_times = (1e3, 2e3, 3e3, 5e3, 1e4, 2e4, 3e4)
+        total_length = sum(exposure_times) * 10
+        if long:
+            total_length += sum(long_exposure_times) * 10
+        total_length *= 1e-3  # ms -> s
+        logger.info(
+            "Generating dark library"
+            + (", including long exposures" if long else "")
+            + f". This will take {total_length:.1f} seconds"
+        )
+
+        for exp_time in exposure_times:
+            self.exposure_time_ms = exp_time
+            self.generate_dark()
+
+        if long:
+            for exp_time in long_exposure_times:
+                self.exposure_time_ms = exp_time
+                self.generate_dark()
+
+        self.exposure_time_ms = original_exposure_time
+        logger.info("Standard dark library completed")
+
+    def read_numpy(self, subtract: bool = False) -> np.ndarray:
         """
         Reads the most recently exposed image as a NumPy array.
 
+        Subtracts a master dark from the image if one is available for the
+        exposure time in the dark library.
+
+        Parameters
+        ----------
+        subtract : bool, default=False
+            Whether to subtract a dark if available.
         Returns
         -------
         np.ndarray
@@ -712,8 +844,14 @@ class UeyeCamera:
 
         total_bytes = self._width * self._height * ((self._bits_per_pixel + 7) // 8)
         buffer = ctypes.string_at(self._mem_ptr, total_bytes)
-        arr = np.frombuffer(buffer, dtype=np.int16)
+        arr = np.copy(np.frombuffer(buffer, dtype=np.int16))
         img = arr.reshape((self._height, self._width))
+
+        if subtract:
+            dark = self._get_dark()
+            if dark is not None:
+                img -= dark
+
         return img
 
     # ---- FITS ----
@@ -737,15 +875,15 @@ class UeyeCamera:
 
         return header
 
-    def read_hdu(self) -> fits.ImageHDU:
+    def read_hdu(self, subtract: bool = False) -> fits.ImageHDU:
         """
         Returns the most recent image as a FITS ImageHDU.
         """
-        data = self.read_numpy()
+        data = self.read_numpy(subtract=subtract)
         header = self._generate_fits_header()
         return fits.ImageHDU(data=data, header=header)
 
-    def save_fits(self, suffix: Optional[str] = None, overwrite: bool = False) -> Path:
+    def save_fits(self, suffix: Optional[str] = None, subtract: bool = False) -> Path:
         """
         Saves the most recent image to a FITS file.
         """
@@ -769,8 +907,8 @@ class UeyeCamera:
             parents=True, exist_ok=True
         )  # creates parent folders if needed
         full_path = save_folder / filename
-        hdu = self.read_hdu()
-        hdu.writeto(full_path, overwrite=overwrite)
+        hdu = self.read_hdu(subtract=subtract)
+        hdu.writeto(full_path)
 
-        logger.info(f"Saved {full_path} with overwrite: {overwrite}")
+        logger.info(f"Saved {full_path}")
         return full_path

@@ -18,8 +18,6 @@ Generate two maps over patrol area, one for ring size (tilt) and one for ring th
 Generate pdf report containing table of all image fit values, histograms of ring size and thickness, and colormaps of ring size and thickness over patrol area (along with some mathematical info on it?).
 """
 
-import time
-
 import matplotlib.pyplot as plt
 import yaml
 from pyueye import ueye
@@ -98,13 +96,18 @@ def run() -> None:
     with UeyeCamera(camera_ID) as camera:
         configure_camera(camera)
 
-        camera.expose()
-        img = camera.read_numpy()
-        plt.imshow(img)
-        plt.colorbar()
-        plt.show(block=False)
+        explist = (1, 2, 3, 5, 10, 15, 20, 30)
+        for exp in explist:
+            camera.exposure_time_ms = exp * 1e3
+            camera.expose()
+            # img = camera.read_numpy(subtract=True)
+            # plt.imshow(img, vmin=-100, vmax=100)
+            # plt.colorbar()
+            # plt.show(block=True)
+            camera.save_fits(suffix=f"ring_{exp}s", subtract=False)
+            camera.save_fits(suffix=f"ring_{exp}s_Dsub", subtract=True)
 
-        _ = camera.save_fits()
+        # camera.generate_standard_darks(long=True)
 
 
 if __name__ == "__main__":

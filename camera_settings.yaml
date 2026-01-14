@@ -1,4 +1,4 @@
-camera_ID: 2
+camera_ID: 0
 camera_model: UI306xCP-M
 settings:
     color_mode: IS_CM_SENSOR_RAW12
