@@ -1,5 +1,5 @@
 """
-Wrapper for pyueye functions. Written in part by ChatGPT.
+Wrapper for pyueye functions.
 """
 
 from __future__ import annotations
