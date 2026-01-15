@@ -343,6 +343,39 @@ class UeyeCamera:
         )
         return ctypes_to_normal(clocks)
 
+    @property
+    def temperature(self) -> float:
+        """
+        Get the temperature (Celsius) of the sensor.
+
+        The temperature is given as a 16-bit unsigned float (``c_ushort``)
+        with the 15th bit encoding sign, bits 4 to 10 encoding the
+        temperature before the decimal point, and bits 0 to 3 encoding the
+        temperature after the decimal point.
+
+        Returns
+        -------
+        float
+            Sensor temperature in Celsius.
+        """
+        binary_temp = self.device_info["infoDevHeartbeat"]["wTemperature"]
+
+        # Bits 4 to 10
+        integer_part = (binary_temp & 0x07F0) >> 4
+
+        # Bits 0 to 3
+        decimal_part = binary_temp & 0x000F
+
+        # Bit 15 encodes sign
+        negative = (binary_temp >> 15) & 0x01
+
+        temp = integer_part + decimal_part / 10
+
+        if negative:
+            temp = -temp
+
+        return temp
+
     # ---- Configuration (properties) ----
 
     @property
