@@ -461,6 +461,10 @@ class UeyeCamera:
         There are only a discrete number of available exposure times. The
         exposure time will be set to the closest one available. (The
         spacing of available exposure times might be influenced by the pixel clock.)
+
+        If setting the exposure time results in long exposure being enabled
+        or disabled, this may temporarily disable the event frame loop (see
+        `self.exposure`).
         """
         if ms > 1e3:
             enable = ueye.c_uint(1)
@@ -703,7 +707,7 @@ class UeyeCamera:
             set_auto_parameter(self.handle, setting, pval, pval)
             logger.debug(f"Set auto parameter {setting} to {enable}")
         except PyUeyeError as e:
-            if e.error_code == 155 and ignore_not_implemented:
+            if e.error_code == ueye.IS_NOT_SUPPORTED and ignore_not_implemented:
                 logger.debug(
                     f"Attempted to adjust unsupported auto-parameter setting {setting}"
                 )
@@ -797,6 +801,7 @@ class UeyeCamera:
         wait_for_img.nEvent = self._image_available
         wait_for_img.nTimeoutMilliseconds = ueye.UINT(
             round(max(self.exposure_time_ms * 1.1, self.exposure_time_ms + 300))
+            # typical USB overhead around 150ms
         )
         event(
             self.handle,
@@ -948,12 +953,15 @@ class UeyeCamera:
         np.ndarray
             Numpy array of pixel data in the same shape as the sensor.
         """
+        assert self._mem_ptr.value is not None, "No memory allocated"
         assert self._last_exposure_time is not None, "No image available"
         assert isinstance(self._width, int)
         assert isinstance(self._height, int)
         assert isinstance(self._bits_per_pixel, int)
 
         total_bytes = self._width * self._height * ((self._bits_per_pixel + 7) // 8)
+
+        # accessing _mem_ptr without allocation will cause a hard crash
         buffer = ctypes.string_at(self._mem_ptr, total_bytes)
         arr = np.copy(np.frombuffer(buffer, dtype=np.int16))
         img = arr.reshape((self._height, self._width))

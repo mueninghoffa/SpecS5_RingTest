@@ -124,9 +124,11 @@ class UeyeCommand:
         if result == ueye.IS_SUCCESS or self.accept(result, args):
             return result
 
-        error_text = None
+        # Almost all ueye functions take the camera handle as the first arg
         if camera_handle is None and isinstance(args[0], ueye.c_uint):
             camera_handle = args[0]
+
+        error_text = None
         if camera_handle is not None:
             error_code = ueye.int()
             error_message = ueye.char_p()
@@ -275,8 +277,7 @@ def _color_mode_accept(result: int, args: tuple[int, ...]) -> bool:
         return result in valid_modes
 
     if args[1] == ueye.IS_GET_BITS_PER_PIXEL:
-        # this could be better defined
-        return result > 0 and result % 2 == 0
+        return result in ueye_constants["possible_bpp"]
     return False
 
 
