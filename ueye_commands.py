@@ -9,9 +9,14 @@ from typing import Any, Callable, Optional, cast
 import yaml
 from pyueye import ueye
 
-from logging_config import get_logger
-
-logger = get_logger(__name__)
+#fmt: off
+try:
+    from logging_config import get_logger
+    logger = get_logger(__name__)
+except ModuleNotFoundError:
+    import logging
+    logger = logging.getLogger()
+#fmt: on
 
 Predicate = Callable[[int, tuple[int, ...]], bool]
 

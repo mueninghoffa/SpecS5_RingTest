@@ -14,8 +14,16 @@ import numpy as np
 from astropy.io import fits
 from pyueye import ueye
 
+#fmt: off
+try:
+    from logging_config import get_logger
+    logger = get_logger(__name__)
+except ModuleNotFoundError:
+    import logging
+    logger = logging.getLogger()
+#fmt: on
+
 from ctypes_to_normal import ctypes_to_normal
-from logging_config import get_logger
 from ueye_commands import (
     PyUeyeError,
     alloc_image_mem,
@@ -42,9 +50,6 @@ from ueye_commands import (
 Ueye_Camera_List: TypeAlias = ueye.UEYE_CAMERA_LIST  # type: ignore
 Ueye_Color_Mode: TypeAlias = int
 Ueye_Auto_Param: TypeAlias = int
-
-
-logger = get_logger(__name__)
 
 
 def number_of_cameras() -> int:
