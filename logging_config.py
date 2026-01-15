@@ -3,8 +3,13 @@ Logging configuration, including filters and getter.
 """
 
 import logging
+import os
+import sys
+from datetime import datetime
 from pathlib import Path
-from typing import cast
+from typing import Optional, cast
+
+from matplotlib.figure import Figure
 
 SAFE_MODULES = {"__main__", "ueye_camera", "ueye_commands", "logging_config"}
 
@@ -241,3 +246,56 @@ def set_up_logging(
     else:
         for loc, level in zip(log_locations, log_levels):
             logger.info(f"Logging to {loc} with level {level}")
+
+
+def plot_logger(fig: Figure, name: Optional[str] = None, **kwargs) -> str:
+    """
+    Saves a `matplotlib.figure.Figure` as a png.
+
+    The figure is saved to
+    ``./log_plots/YYYYMMDD-HHMMSS_<func name>_line<line number>_<name>.png``
+    if `name` is provided, otherwise
+    ``./log_plots/YYYYMMDD-HHMMSS_<func name>_line<line number>.png``.
+
+    This function uses `sys._getframe`. If this is called in a Python
+    implementation other than CPython, such as IronPython or Jython, this
+    function may not be implemented. In this case, the function and file
+    names are "unknown" and the line number is 0.
+
+    Parameters
+    ----------
+    fig : matplotlib.figure.Figure
+        The matplotlib figure to be saved.
+    name : str, optional
+        A name to append to the file name.
+    **kwargs
+        Extra arguments passed to `matplotlib.figure.Figure.savefig`.
+
+    Returns
+    -------
+    str
+        File path the figure was saved to.
+
+    Notes
+    -----
+    The figure is not closed by this function.
+    """
+    now = datetime.now()
+    date_time_str = now.strftime("%Y%m%d-%H%M%S")
+    try:
+        frame = sys._getframe(1)
+        code = frame.f_code
+        metadata = {
+            "file": os.path.basename(code.co_filename),
+            "line": frame.f_lineno,
+            "func": code.co_name,
+        }
+    except (AttributeError, ValueError):
+        # Fallback for environments without frame support
+        metadata = {"file": "unknown", "line": 0, "func": "unknown"}
+
+    plot_path = f"./log_plots/{date_time_str}_{metadata['func']}_line{metadata['line']}_{name}.png"
+    logger.debug(f"{plot_path} saved from {metadata["file"]}")
+    fig.savefig(plot_path, format="png", facecolor="white", **kwargs)
+
+    return plot_path

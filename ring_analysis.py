@@ -8,9 +8,10 @@ from matplotlib import collections as mc
 from matplotlib import pyplot as plt
 from matplotlib.figure import Figure
 
-from logging_config import get_logger, set_up_logging
+from logging_config import get_logger, plot_logger, set_up_logging
 
-logger = get_logger(__name__)
+if __name__ != "__main__":
+    logger = get_logger(__name__)
 
 RealNDArray: TypeAlias = npt.NDArray[np.floating | np.integer]
 
@@ -150,9 +151,8 @@ def guess_ring_params(
         fig = guess_plot(img_data, xygrid, guess_params)
         logger.debug("Guess params plot generated")
 
-        # if log_plot:
-        #     fig.savefig("./log_images/guess.png", format="png")
-        #     logger.debug("Guess params plot saved")
+        if log_plot:
+            plot_logger(fig)
         if show_plot:
             plt.show(block=True)
 
@@ -270,9 +270,8 @@ def fit_gaussian_ring(
     if show_plots[1] or log_plots[1]:
         fig = plot_fit_result(result, img_data, xygrid)
         logger.debug("Fit results plot generated")
-        # if log_plots[1]:
-        #     fig.savefig("./log_images/fit.png", format="png")
-        #     logger.debug("Fit results plot saved")
+        if log_plots[1]:
+            plot_logger(fig)
         if show_plots[1]:
             plt.show(block=True)
 
@@ -281,6 +280,8 @@ def fit_gaussian_ring(
 
 def run() -> None:
     set_up_logging(log_to_console=True, log_to_file=True)
+    global logger
+    logger = get_logger(__name__)
     img_path = "./ueye_fits_images/20260113_4103056678/ring_30s_Dsub/20260113_185250_ring_30s_Dsub_0016.fits"
     img_data = fits.open(img_path)[1].data  # pyright: ignore reportAttributeAccessIssue
     fit_gaussian_ring(img_data, show_plots=(True, True), log_plots=True)
