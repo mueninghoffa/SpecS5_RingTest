@@ -31,21 +31,41 @@ def ctypes_to_normal(item: Any) -> Any:
         except ValueError:
             return None
 
-    # Decode bytes
-    if isinstance(item, bytes):
+    # Decode bytes and and string pointers
+    # c_char_p is not actually an instance of the _Pointer class
+    if isinstance(item, (bytes, ctypes.c_char_p)):
+        val = item.value if isinstance(item, ctypes.c_char_p) else item
+        if val is None:
+            return None
         try:
-            return item.decode("utf-8")
-        except UnicodeDecodeError:
-            return item
+            # strip the binary null terminator
+            return val.decode("utf-8", errors="ignore").strip("\x00")
+        except (UnicodeDecodeError, AttributeError):
+            return val
 
     # Convert Arrays to numpy ndarrays
     if isinstance(item, ctypes.Array):
-        if issubclass(item._type_, ctypes.Structure):
+        # SPECIAL CASE: convert array of c_char to string
+        if item._type_ == ctypes.c_char:
+            try:
+                return item.value.decode("utf-8", errors="ignore")
+            except Exception:
+                # default to numpy array
+                pass
+
+        # Recurse on elements
+        if issubclass(item._type_, (ctypes.Structure, ctypes.Array)):
             return np.array([ctypes_to_normal(x) for x in item])
+
         return np.ctypeslib.as_array(item).copy()
 
+    # Union fields can reference overlapping memory segments
+    # better to just return the object as is
+    if isinstance(item, ctypes.Union):
+        return item
+
     # Iterate over struct fields to build dict
-    if hasattr(item, "_fields_"):
+    if isinstance(item, ctypes.Structure):
         output = {}
         for field in item._fields_:
             key = ctypes_to_normal(field[0])
