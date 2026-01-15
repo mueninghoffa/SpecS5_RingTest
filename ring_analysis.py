@@ -1,3 +1,4 @@
+import inspect
 from typing import TypeAlias, cast
 
 import lmfit
@@ -5,6 +6,7 @@ import numpy as np
 import numpy.typing as npt
 from astropy.io import fits
 from matplotlib import collections as mc
+from matplotlib import patches
 from matplotlib import pyplot as plt
 from matplotlib.figure import Figure
 
@@ -32,6 +34,11 @@ def gaussian_ring(
     return A * np.exp(-1 * (R - r) ** 2 / (2 * sigma**2)) + C
 
 
+# Order of fit parameters in gaussian_ring
+gaussian_ring_signature = inspect.signature(gaussian_ring)
+PARAMETERS_ORDERED = list(gaussian_ring_signature.parameters.keys())[1:]
+
+
 def guess_plot(
     img_data: RealNDArray,
     xygrid: RealNDArray,
@@ -41,22 +48,61 @@ def guess_plot(
     img_shape = np.shape(img_data)
     aspect_ratio = img_shape[0] / img_shape[1]
     fig, ax = plt.subplots(figsize=(5 / aspect_ratio + 2, 5))
-    plt.pcolormesh(*xygrid, img_data, shading="nearest")
+    mesh = plt.pcolormesh(*xygrid, img_data, shading="nearest")
     # shading='nearest' centers squares on img_data points
-    cbar = plt.colorbar()
-    cbar.set_label("Pixel values", fontsize=14)
+    cbar = plt.colorbar(mesh)
+    cbar.set_label("Pixel & Best Fit values", fontsize=14)
 
     # location of brightest pixel (A guess)
     max_idx = np.unravel_index(np.argmax(img_data), img_data.shape)
-    xmax = xygrid[0][max_idx]
-    ymax = xygrid[1][max_idx]
+    xmax = int(xygrid[0][max_idx])
+    ymax = int(xygrid[1][max_idx])
+    plt.scatter(
+        [xmax],
+        [ymax],
+        color="blue",
+        marker="o",
+        s=15,
+        zorder=10,
+        label=f"brightest pixel: ({xmax:d}, {ymax:d})",
+    )
+
+    # C-guess colored square
+    C_guess_color = mesh.cmap(mesh.norm(guess_params["C"]))
+    rect_w, rect_h = 0.15, 0.15
+    rect_x, rect_y = 1 - rect_w, 0
+    rect = patches.Rectangle(
+        (rect_x, rect_y),
+        rect_w,
+        rect_h,
+        linewidth=2,
+        edgecolor="white",
+        facecolor=C_guess_color,
+        transform=ax.transAxes,  # use axes coords, not data coords
+        zorder=10,
+    )
+    ax.add_patch(rect)
+
+    rect_cx = rect_x + rect_w / 2
+    rect_cy = rect_y + rect_h / 2
+    ax.text(
+        rect_cx,
+        rect_cy,
+        f"C guess: {guess_params["C"]:.1f}",
+        color="white",
+        fontsize=8,
+        ha="center",  # horizontal/vertical alignment
+        va="center",
+        transform=ax.transAxes,  # use axes coords
+        zorder=11,
+    )
 
     # from photocenter to brightest pixel
     R_guess_line = mc.LineCollection(
         [[(guess_params["X"], guess_params["Y"]), (xmax, ymax)]],
         colors=(1, 0, 0, 1),
         linewidths=2,
-        label="R guess",
+        label=f"R guess: {guess_params["R"]:.1f}",
     )
     # line of length of sigma guess across ring
     sigma_guess_line = mc.LineCollection(
@@ -74,32 +120,24 @@ def guess_plot(
         ],
         colors=(1, 0.4, 0.7, 1),
         linewidths=3,
-        label="sigma guess",
+        label=f"sigma guess: {guess_params["sigma"]:.1f}",
     )
     ax.add_collection(R_guess_line)
     ax.add_collection(sigma_guess_line)
 
-    plt.scatter(
-        [xmax],
-        [ymax],
-        color="blue",
-        marker="o",
-        s=15,
-        zorder=10,
-        label="brightest pixel",
-    )
+    # photocenter position
     plt.scatter(
         [guess_params["X"]],
         [guess_params["Y"]],
         color="white",
         marker="+",
         zorder=10,
-        label="photocenter",
+        label=f"photocenter: ({guess_params["X"]:.1f}, {guess_params["Y"]:.1f})",
     )
 
-    ax.legend(ncol=4, loc="upper center", fontsize=8)
-    ax.set_xlabel("x (mm)", fontsize=16)
-    ax.set_ylabel("y (mm)", fontsize=16)
+    ax.legend(ncol=2, loc="upper center", fontsize=8)
+    ax.set_xlabel("x (pix)", fontsize=16)
+    ax.set_ylabel("y (pix)", fontsize=16)
 
     return fig
 
@@ -117,13 +155,8 @@ def guess_ring_params(
     # This requires that hot pixels be absent from image data
     guess_params["A"] = img_data.max()
 
-    # Note working very well
-    # Guess C from histogram features
-    # hist = np.histogram(img_data.flatten(), bins=50)
-    # drop = hist[1][int(np.argmax(np.abs(np.diff(hist[0]))))]
-    # noise_width = drop - img_data.min()
-    # guess_params["C"] = img_data.min() + noise_width / 2
-    guess_params["C"] = 0
+    # Guess C to be median pixel value
+    guess_params["C"] = np.median(img_data.flatten())
 
     # Guess X, Y from photocenter
     norm_img_data = img_data - guess_params["C"]
@@ -144,7 +177,7 @@ def guess_ring_params(
     halfmax = (img_data1d.max() - img_data1d.min()) / 2 + img_data1d.min()
     img_datahalfmax = np.abs(img_data1d - halfmax)
     pixFWHM = abs(np.argmin(img_datahalfmax) - np.argmin(img_datahalfmax[::-1]))
-    guess_params["sigma"] = (pixFWHM - 2 * guess_params["R"]) / 2.355
+    guess_params["sigma"] = abs((pixFWHM - 2 * guess_params["R"]) / 2.355)
     # 2 * sqrt( 2 * ln(2) ) =~ 2.355
 
     if show_plot or log_plot:
@@ -155,21 +188,35 @@ def guess_ring_params(
             plot_logger(fig)
         if show_plot:
             plt.show(block=True)
+        else:
+            plt.close()
 
     return guess_params
 
 
+def plot_fit_strs(
+    val_unc_params: dict[str, str],
+) -> list[str]:
+    result_str_list = [
+        f"{name} = {val_unc_params[name]}" for name in PARAMETERS_ORDERED
+    ]
+    return result_str_list
+
+
 def plot_fit_result(
-    fit_result: lmfit.model.ModelResult, img_data: RealNDArray, xygrid: RealNDArray
+    best_fit_params: dict[str, float],
+    unc_params: dict[str, str],
+    img_data: RealNDArray,
+    xygrid: RealNDArray,
 ) -> Figure:
-    # TODO: show best fit values in a legend
-    fit_data = cast(RealNDArray, fit_result.eval(xy=xygrid))
+    best_fit_values = [best_fit_params[name] for name in PARAMETERS_ORDERED]
+    fit_data = gaussian_ring(xygrid, *best_fit_values)
     residuals = img_data - fit_data
 
     img_shape = np.shape(img_data)
     aspect_ratio = img_shape[0] / img_shape[1]
     fig, axs = plt.subplots(
-        figsize=(3 * 5 / aspect_ratio + 8, 5),
+        figsize=(3 * 5 / aspect_ratio + 2, 5),
         nrows=1,
         ncols=5,
         layout="constrained",
@@ -185,13 +232,29 @@ def plot_fit_result(
     resid_c = axs[3].pcolormesh(*xygrid, residuals, shading="nearest")
     fig.colorbar(resid_c, cax=axs[4])
 
+    # best fit values and uncertainties
+    results_str = ("\n").join(plot_fit_strs(unc_params))
+    text_x, text_y = 0.99, 0.98
+    axs[2].text(
+        text_x,
+        text_y,
+        results_str,
+        ha="right",
+        va="top",
+        fontsize=8,
+        color="black",
+        zorder=10,
+        transform=axs[2].transAxes,  # use axes coords, not data coords
+        bbox=dict(edgecolor="black", facecolor="white", alpha=0.6, boxstyle="round"),
+    )
+
     axs[0].set_title("Data", fontsize=20)
     axs[2].set_title("Best Fit", fontsize=20)
     axs[3].set_title("Residuals", fontsize=20)
 
-    axs[0].set_ylabel("y (mm)", fontsize=16)
+    axs[0].set_ylabel("y (pix)", fontsize=16)
     for ax in (axs[0], axs[2], axs[3]):
-        ax.set_xlabel("x (mm)", fontsize=16)
+        ax.set_xlabel("x (pix)", fontsize=16)
 
     axs[1].set_ylabel("Pixel Values", fontsize=14, rotation=270, labelpad=15)
     axs[4].set_ylabel("Data - Fit", fontsize=14, rotation=270, labelpad=15)
@@ -252,8 +315,8 @@ def fit_gaussian_ring(
     params = model.make_params()
 
     x_num_pix, y_num_pix = np.shape(img_data)
-    xlist = np.arange(x_num_pix) - x_num_pix / 2
-    ylist = np.arange(y_num_pix) - y_num_pix / 2
+    xlist = np.arange(x_num_pix)
+    ylist = np.arange(y_num_pix)
     xygrid = cast(RealNDArray, np.meshgrid(ylist, xlist))
     guess_params = guess_ring_params(
         img_data, xygrid, show_plot=show_plots[0], log_plot=log_plots[0]
@@ -268,12 +331,14 @@ def fit_gaussian_ring(
     logger.info(result.fit_report())
 
     if show_plots[1] or log_plots[1]:
-        fig = plot_fit_result(result, img_data, xygrid)
+        fig = plot_fit_result(result.best_values, result.uvars, img_data, xygrid)
         logger.debug("Fit results plot generated")
         if log_plots[1]:
             plot_logger(fig)
         if show_plots[1]:
             plt.show(block=True)
+        else:
+            plt.close()
 
     return result
 
@@ -284,7 +349,7 @@ def run() -> None:
     logger = get_logger(__name__)
     img_path = "./ueye_fits_images/20260113_4103056678/ring_30s_Dsub/20260113_185250_ring_30s_Dsub_0016.fits"
     img_data = fits.open(img_path)[1].data  # pyright: ignore reportAttributeAccessIssue
-    fit_gaussian_ring(img_data, show_plots=(True, True), log_plots=True)
+    fit_gaussian_ring(img_data, show_plots=(False, False), log_plots=(True, True))
 
 
 if __name__ == "__main__":
