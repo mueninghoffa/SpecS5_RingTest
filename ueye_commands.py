@@ -143,29 +143,134 @@ class UeyeCommand:
 # ---- Predicates ----
 
 
-def gain_accept(result: int, args: tuple[int, ...]) -> bool:
-    getters = ueye_constants["gain_getters"]
+def ueye_const_str_to_int(names: list[str]) -> list[int]:
+    """
+    Converts a list of names of `ueye` constants to the values they represent.
+
+    Parameters
+    ----------
+    names : list of strings
+        List of strings to be converted to `ueye` constants.
+
+    Returns
+    -------
+    list of ints
+        List of ints corresponding to `ueye` constants.
+
+    Raises
+    ------
+    TypeError
+        Raised if `names` contains a non-constant `ueye` attribute.
+    """
+    vals = []
+    for name in names:
+        val = getattr(ueye, name)
+        if isinstance(val, int):
+            vals.append(val)
+        else:
+            raise TypeError(f"{name} is not a ueye constant (int)")
+
+    return vals
+
+
+def _gain_accept(result: int, args: tuple[int, ...]) -> bool:
+    """
+    Interprets value returned from `ueye.is_SetHardwareGain` when an error code is not expected.
+
+    When any of the "get" ueye constants for gain are passed to
+    `ueye.is_SetHardwareGain`, the returned value may be the gain setting
+    from 0 to 100, instead of an error code.
+
+    Parameters
+    ----------
+    result : int
+        The returned value. Typically a ueye error code.
+    args : tuple of ints
+        The arguments passed to the function.
+
+    Returns
+    -------
+    bool
+        Whether `result` is expected given the `args`.
+    """
+    getters = ueye_const_str_to_int(ueye_constants["gain_getters"])
     if args[1] in getters:
         return 0 <= result <= 100
     return False
 
 
-def gamma_accept(result: int, args: tuple[int, ...]) -> bool:
+def _gamma_accept(result: int, args: tuple[int, ...]) -> bool:
+    """
+    Interprets value returned from `ueye.is_SetHardwareGamma` when an error code is not expected.
+
+    When `ueye.IS_GET_HW_GAMMA` or `ueye.IS_GET_HW_SUPPORTED_GAMMA` are
+    supplied to `ueye.is_SetHardwareGamma`, the returned value may be
+    meaningful instead of an error code.
+
+    Parameters
+    ----------
+    result : int
+        The returned value. Typically a ueye error code.
+    args : tuple of ints
+        The arguments passed to the function.
+
+    Returns
+    -------
+    bool
+        Whether `result` is expected given the `args`.
+    """
     if args[1] == ueye.IS_GET_HW_GAMMA:
-        return result >= 0  # I think this is correct?
+        return result == 0 or result == 1
     if args[1] == ueye.IS_GET_HW_SUPPORTED_GAMMA:
         return result in (ueye.IS_SET_HW_GAMMA_ON, ueye.IS_SET_HW_GAMMA_OFF)
     return False
 
 
-def camera_id_accept(result: int, args: tuple[int, ...]) -> bool:
+def _camera_id_accept(result: int, args: tuple[int, ...]) -> bool:
+    """
+    Interprets value returned from `ueye.is_SetCameraID` when an error code is not expected.
+
+    When `ueye.IS_GET_CAMERA_ID` is supplied to `ueye.is_SetCameraID`, the
+    returned value may be the camera ID instead of an error code.
+
+    Parameters
+    ----------
+    result : int
+        The returned value. Typically a ueye error code.
+    args : tuple of ints
+        The arguments passed to the function.
+
+    Returns
+    -------
+    bool
+        Whether `result` is expected given the `args`.
+    """
     if args[1] == ueye.IS_GET_CAMERA_ID and 1 <= result <= 254:
         return True
     return False
 
 
-def color_mode_accept(result: int, args: tuple[int, ...]) -> bool:
-    valid_modes = ueye_constants["valid_color_modes"]
+def _color_mode_accept(result: int, args: tuple[int, ...]) -> bool:
+    """
+    Interprets value returned from `ueye.is_SetColorMode` when an error code is not expected.
+
+    When `ueye.IS_GET_COLOR_MODE` or `ueye.IS_GET_BITS_PER_PIXEL` are
+    supplied to `ueye.is_SetColorMode`, the returned value may be a ueye
+    constant coresponding to a color mode, instead of an error code.
+
+    Parameters
+    ----------
+    result : int
+        The returned value. Typically a ueye error code.
+    args : tuple of ints
+        The arguments passed to the function.
+
+    Returns
+    -------
+    bool
+        Whether `result` is expected given the `args`.
+    """
+    valid_modes = ueye_const_str_to_int(ueye_constants["valid_color_modes"])
     if args[1] == ueye.IS_GET_COLOR_MODE:
         return result in valid_modes
 
@@ -204,7 +309,7 @@ get_camera_list = UeyeCommand(ueye.is_GetCameraList)
 
 # ---- Common commands that might return a value ----
 
-set_camera_id = UeyeCommand(ueye.is_SetCameraID, accept=camera_id_accept)
-set_hardware_gain = UeyeCommand(ueye.is_SetHardwareGain, accept=gain_accept)
-set_hardware_gamma = UeyeCommand(ueye.is_SetHardwareGamma, accept=gamma_accept)
-set_color_mode = UeyeCommand(ueye.is_SetColorMode, accept=color_mode_accept)
+set_camera_id = UeyeCommand(ueye.is_SetCameraID, accept=_camera_id_accept)
+set_hardware_gain = UeyeCommand(ueye.is_SetHardwareGain, accept=_gain_accept)
+set_hardware_gamma = UeyeCommand(ueye.is_SetHardwareGamma, accept=_gamma_accept)
+set_color_mode = UeyeCommand(ueye.is_SetColorMode, accept=_color_mode_accept)
