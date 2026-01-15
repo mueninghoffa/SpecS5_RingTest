@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import ctypes
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional, TypeAlias
 
@@ -103,32 +103,67 @@ class UeyeCamera:
         ID of the camera to be initialized, as stored in the camera's
         non-volatile memory. This is passed to ``ueye.is_InitCamera()``.
         If 0 (default), the first available camera will be initialized.
+    base_dir : str, default="./ueye_fits_images"
+        The parent directory where fits images will be saved.
+    dark_library : str, default="./ueye_dark_library"
+        The parent directory of the dark library.
 
     Attributes
     ----------
     handle : `ueye.c_uint`
         Handle of the camera.
+    save_dir : `pathlib.Path`
+        ``<base_dir>/YYMMDD_<camera serial number>``
+        The directory within which saved fits images will be placed.
+    dark_library : `pathlib.Path`
+        The directory containing the dark library.
     device_info : dict
         Information about the device (Read-only).
     camera_info : dict
         Information about the camera (Read-only).
     sensor_info : dict
         Information about the sensor (Read-only).
+    pixel_clock_possible_values : list of ints
+        List of available pixel clock settings in MegaHertz (MHz) (Read-only).
+    temperature : float
+        Sensor temperature in Celsius (Read-only).
     exposure_time_ms : float
         Exposure time in milliseconds (Read/Write).
-    gain : float
+    gain : int
         Global hardware gain (Read/Write).
     pixel_clock : int
         Pixel clock mode (Read/Write).
     gamma : bool
         Whether hardware gamma correction is enabled (Read/Write).
+    color_mode : int
+        Corresponds to a ueye constant for a color mode (Read/Write).
 
     Methods
     -------
-    connect()
-        Initialize the camera.
-    close()
-        Disconnect from camera and free allocated memory.
+    auto_parameters(params)
+        Enable/Disable automatic adjustment of camera settings.
+    expose()
+        Trigger an exposure. Blocks until exposure is complete.
+    generate_dark(n=11)
+        Generate and save a master dark by taking the median of `n` darks.
+    generate_standard_darks(long=False)
+        Generate darks for a number of common exposure times.
+    read_numpy(subtract=False)
+        Returns the most recent image as a numpy array.
+    read_hdu(subtract=False)
+        Returns the most recent image as n `astropy.io.fits` HDU.
+    save_fits(suffix=None, subtract=False)
+        Saves the most recent image as a fits file.
+
+    See Also
+    --------
+    ueye_commands : Module for simplified use of pyueye functions
+
+    Notes
+    -----
+    This class makes extensive use of the pyueye package.
+    See the `uEye <https://www.1stvision.com/cameras/IDS/IDS-manuals/uEye_Manual>`
+    documentation.
     """
 
     def __init__(
@@ -138,7 +173,7 @@ class UeyeCamera:
         dark_library: str = "./ueye_dark_library",
     ) -> None:
         self.handle = ueye.HIDS(camera_id)
-        self.base_dir = Path(base_dir)
+        self.save_dir = Path(base_dir)
         self.dark_library = Path(dark_library)
         self._darks = dict()
 
@@ -159,8 +194,9 @@ class UeyeCamera:
 
     def _connect(self) -> None:
         """
-        Initialize camera, set it to accept software triggers, and get
-        sensor size and serial number.
+        Initialize camera and connect to camera.
+
+        Sets the camera to trigger an exposure from a software trigger.
         """
         if self._connected:
             logger.warning("Attempted to connect to camera while already connected")
@@ -171,6 +207,11 @@ class UeyeCamera:
         self._width = self.sensor_info["nMaxWidth"]
         self._height = self.sensor_info["nMaxHeight"]
         self._serial_no = int(self.camera_info["SerNo"])
+
+        now = datetime.now()
+        date_str = now.strftime("%Y%m%d")
+
+        self.save_dir = self.save_dir / f"{date_str}_{self._serial_no}"
         self.dark_library = self.dark_library / f"{self._serial_no}"
 
         self._connected = True
@@ -321,13 +362,13 @@ class UeyeCamera:
         return ctypes_to_normal(info)
 
     @property
-    def pixel_clock_possible_values(self) -> list[float]:
+    def pixel_clock_possible_values(self) -> list[int]:
         """
         Get camera's possible pixel clock values.
 
         Returns
         -------
-        list of floats
+        list of ints
             List containing the valid pixel clock values in MegaHertz (MHz).
         """
         num_clocks = ueye.uint()
@@ -402,7 +443,7 @@ class UeyeCamera:
         """
         Set the exposure time in milliseconds (ms).
 
-        Verifies that the framerate is adjusted to be consistent. Enables
+        Warns if framerate is not adjusted to be consistent. Enables
         long exposures as necessary (>1s).
 
         Parameters
@@ -417,7 +458,9 @@ class UeyeCamera:
 
         Notes
         -----
-        The
+        There are only a discrete number of available exposure times. The
+        exposure time will be set to the closest one available. (The
+        spacing of available exposure times might be influenced by the pixel clock.)
         """
         if ms > 1e3:
             enable = ueye.c_uint(1)
@@ -502,6 +545,14 @@ class UeyeCamera:
         -------
         int
             Current pixel clock in MegaHertz (MHz).
+
+        See Also
+        --------
+        UeyeCamera.pixel_clock_possible_values : Get available values
+
+        Notes
+        -----
+        There are only a discrete number of pixel clock values available.
         """
         value = ueye.uint()
         pixel_clock(self.handle, ueye.IS_PIXELCLOCK_CMD_GET, value, ueye.sizeof(value))
@@ -516,6 +567,15 @@ class UeyeCamera:
         ----------
         mhz : int
             New pixel clock setting in MegaHertz (MHz).
+
+        See Also
+        --------
+        UeyeCamera.pixel_clock_possible_values : Get available values
+
+        Notes
+        -----
+        There are only a discrete number of pixel clock values available.
+        The camera is set to which valid value is closest to `mhz`.
         """
         value = ueye.int(mhz)
         pixel_clock(
@@ -729,7 +789,7 @@ class UeyeCamera:
         assert self._image_available is not None, "Image available event is not enabled"
 
         logger.debug("Starting exposure")
-        self._last_exposure_time = datetime.now()
+        self._last_exposure_time = datetime.now(timezone.utc)
         start = time.time()
         freeze_video(self.handle, ueye.IS_DONT_WAIT)
 
@@ -751,7 +811,7 @@ class UeyeCamera:
 
     def _get_dark(self) -> np.ndarray | None:
         """
-        Get the master dark for the current exposure time.
+        Get the most recent master dark for the current exposure time.
 
         Returns
         -------
@@ -785,6 +845,10 @@ class UeyeCamera:
         """
         Generate a master dark by taking the median over `n` images.
 
+        The dark will be saved as
+        ``<self.dark_library>/<camera_serial_number>/YYMMDD_HHMMSS_dark_EEEEEms.fits``,
+        where ``EEEEE`` is the zero-padded exposure time in milliseconds.
+
         Parameters
         ----------
         n : int, default=11
@@ -810,11 +874,13 @@ class UeyeCamera:
 
         self.dark_library.mkdir(parents=True, exist_ok=True)
 
-        now = datetime.now()
-        date_time_str = now.strftime("%Y%m%d_%H%M%S")
+        now = datetime.now(timezone.utc)
+        date_time_str = now.astimezone().strftime("%Y%m%d_%H%M%S")
         filename = f"{date_time_str}_dark_{int(self.exposure_time_ms):05d}ms.fits"
         full_path = self.dark_library / filename
-        hdu = fits.PrimaryHDU(master_dark)  # TO ADD: comprehensive header
+        header = self._generate_fits_header(include_start=False)
+        header["CREATED"] = now.isoformat(), "UTC"
+        hdu = fits.PrimaryHDU(master_dark, header)
         hdu.writeto(full_path, overwrite=True)
 
         logger.info(f"Saved {full_path}")
@@ -828,11 +894,21 @@ class UeyeCamera:
             1, 3, 5, 10, 20, 30, 50, 100, 200, 300, 500, 1000
         If `long` is set to ``True``, the darks are also generated for
         these exposure times (s):
-            1, 2, 3, 5, 10, 20, 30
+            2, 3, 5, 10, 20, 30
+
+        Parameters
+        ----------
+        long : bool, default=False
+            Whether to generate darks for exposure times longer than 1 seconds.
+
+        Notes
+        -----
+        The set of short exposures has a total exposure time of 22 seconds.
+        The set of long exposure has a total exposure time of about 12 minutes.
         """
         original_exposure_time = self.exposure_time_ms
         exposure_times = (1, 3, 5, 10, 20, 30, 50, 100, 200, 300, 500, 1000)  # ms
-        long_exposure_times = (1e3, 2e3, 3e3, 5e3, 1e4, 2e4, 3e4)
+        long_exposure_times = (2e3, 3e3, 5e3, 1e4, 2e4, 3e4)
         total_length = sum(exposure_times) * 10
         if long:
             total_length += sum(long_exposure_times) * 10
@@ -865,12 +941,14 @@ class UeyeCamera:
         Parameters
         ----------
         subtract : bool, default=False
-            Whether to subtract a dark if available.
+            Whether to subtract a dark, if available.
+
         Returns
         -------
         np.ndarray
             Numpy array of pixel data in the same shape as the sensor.
         """
+        assert self._last_exposure_time is not None, "No image available"
         assert isinstance(self._width, int)
         assert isinstance(self._height, int)
         assert isinstance(self._bits_per_pixel, int)
@@ -889,52 +967,110 @@ class UeyeCamera:
 
     # ---- FITS ----
 
-    def _generate_fits_header(self) -> fits.Header:
+    def _generate_fits_header(self, include_start: bool = True) -> fits.Header:
         """
         Constructs a FITS header containing IDS camera metadata.
+
+        Parameters
+        ----------
+        include_start : bool, default=True
+            Whether to include the exposure's start time in the header.
+
+        Returns
+        -------
+        astropy.io.fits.Header
+            FITS header containing camera metadata.
         """
         camera_info = self.camera_info
         sensor_info = self.sensor_info
         device_info = self.device_info
+        heartbeat = device_info["infoDevHeartbeat"]
+        ueye_control = device_info["infoDevControl"]
 
         header = fits.Header()
-        # header["CAMERA"] = "IDS uEye"
-        # header["MODEL"] = cam_info.Model.decode().strip()
-        # header["SERIAL"] = cam_info.SerNo.decode().strip()
-        # header["EXPTIME"] = self.exposure_time_ms / 1000.0
-        # header["WIDTH"] = self._width.value
-        # header["HEIGHT"] = self._height.value
-        # header["BITPIX"] = self._bits_per_pixel.value
+        header["MANUF"] = camera_info["ID"]
+        header["MODEL"] = sensor_info["strSensorName"]
+        header["SERIAL"] = int(camera_info["SerNo"])
+        header["CAMID"] = camera_info["Select"], "can be changed"
+        header["DEVICEID"] = ueye_control["dwDeviceId"]
+        header["SENSTYPE"] = sensor_info["SensorID"]
+        header["FIRMVERS"] = heartbeat["dwRuntimeFirmwareVersion"], "firmware version"
+
+        # header["WIDTH"] = self._width
+        # header["HEIGHT"] = self._height
+        header["SBITPIX"] = self._bits_per_pixel, "significant bits per pixel"
+        header["PIXSIZE"] = sensor_info["wPixelSize"] / 1e2, "microns"
+        header["GLOBSHUT"] = bool(sensor_info["bGlobShutter"]), "global shutter"
+
+        header["EXPTIME"] = self.exposure_time_ms, "milliseconds"
+        header["GAIN"] = self.gain
+        header["PIXCLOCK"] = self.pixel_clock, "MegaHertz"
+        header["TEMP"] = self.temperature, "Celsius"
+
+        if include_start:
+            assert self._last_exposure_time is not None, "No image available"
+            header["DATE-OBS"] = (
+                self._last_exposure_time.isoformat(),
+                "UTC",
+            )
+            header["DATE-LOC"] = (
+                self._last_exposure_time.astimezone().isoformat(),
+                "local time",
+            )
 
         return header
 
-    def read_hdu(self, subtract: bool = False) -> fits.ImageHDU:
+    def read_hdu(self, subtract: bool = False) -> fits.PrimaryHDU:
         """
         Returns the most recent image as a FITS ImageHDU.
+
+        Parameters
+        ----------
+        subtract : bool, default=False
+            Whether to subtract a dark, if available.
+
+        Returns
+        -------
+        astropy.io.fits.ImageHDU
+            HDU with the image data and a header with camera information.
         """
         data = self.read_numpy(subtract=subtract)
         header = self._generate_fits_header()
-        return fits.ImageHDU(data=data, header=header)
+        return fits.PrimaryHDU(data=data, header=header)
 
     def save_fits(self, suffix: Optional[str] = None, subtract: bool = False) -> Path:
         """
         Saves the most recent image to a FITS file.
+
+        If a `suffix` is not supplied, then the image is saved as
+        ``<self.save_dir>/YYYYMMDD_HHMMSS_XXXXX.fits``, where ``XXXXX`` is
+        a five digit index, starting from 1. If a `suffix` is provided, the
+        image is saved as
+        ``<self.save_dir>/suffix/YYYYMMDD_HHMMSS_<suffis>_XXXXX.fits``.
+
+        Parameters
+        ----------
+        suffix : str, optional
+            An optional name to be added to the file path and name.
+        subtract : bool, default=False
+            Whether to subtract a dark, if available.
+
+        Returns
+        -------
+        pathlib.Path
+            Full path of the saved image.
         """
         self._image_counter += 1
 
-        now = self._last_exposure_time
-        assert now is not None
-        date_str = now.strftime("%Y%m%d")
-        date_time_str = now.strftime("%Y%m%d_%H%M%S")
-
-        day_cam_folder = self.base_dir / f"{date_str}_{self._serial_no}"
+        assert self._last_exposure_time is not None, "No image available"
+        date_time_str = self._last_exposure_time.astimezone().strftime("%Y%m%d_%H%M%S")
 
         if suffix:
-            save_folder = day_cam_folder / suffix
-            filename = f"{date_time_str}_{suffix}_{self._image_counter:04d}.fits"
+            save_folder = self.save_dir / suffix
+            filename = f"{date_time_str}_{suffix}_{self._image_counter:05d}.fits"
         else:
-            save_folder = day_cam_folder
-            filename = f"{date_time_str}_{self._image_counter:04d}.fits"
+            save_folder = self.save_dir
+            filename = f"{date_time_str}_{self._image_counter:05d}.fits"
 
         save_folder.mkdir(
             parents=True, exist_ok=True
