@@ -1,3 +1,7 @@
+"""
+Fit an image of a ring with a 2D Gaussian ring model.
+"""
+
 import inspect
 from typing import TypeAlias, cast
 
@@ -27,6 +31,42 @@ def gaussian_ring(
     sigma: float,
     C: float,
 ) -> np.ndarray:
+    r"""
+    Calculate the value of a Gaussian ring given the parameters.
+
+    xy : 3D numpy array containing real numbers
+        A numpy array containing the x and y positions at which to
+        calculate. The outermost dimension of `xy` should contain two 2D
+        arrays, one for the x positions and one for the y positions.
+    A : float
+        Amplitude
+    X, Y : float
+        Position of the center
+    R : float
+        Radius
+    sigma : float
+        Standard deviation of the Gaussian component
+    C : float
+        Constant background value
+
+    Returns
+    -------
+    2D numpy array
+        A 2D array containing the value at the positions in `xy`. This will
+        have the same shape as the inner two dimensions of `xy`.
+
+    Notes
+    -----
+    A Gaussian ring has a circle at which the maximum amplitude is reached,
+    with the value falling off with radial distance from the circle.
+
+    $$
+    G( x, y; A, X, Y, R, \sigma, C ) =
+    A \exp{ \left( - \frac{
+        \left( R - \sqrt{ \left( X - x \right)^2 + \left( Y - y \right)^2 } )^2 }
+                  { 2 \sigma^2 } \right) } + C
+    $$
+    """
     assert np.shape(xy)[0] == 2
     x = xy[0]
     y = xy[1]
@@ -44,6 +84,25 @@ def guess_plot(
     xygrid: RealNDArray,
     guess_params: dict[str, float],
 ) -> Figure:
+    """
+    Visually represent the parameter guessed values on the image.
+
+    Parameters
+    ----------
+    img_data : 2D numpy array of real numbers
+        Original image data to be plotted.
+    xy_grid : 3D numpy array of position for `img_data`
+        A numpy array containing the x and y positions of the `img_data`
+        values. The outer dimension should have length two, containing the
+        x and y positions as separate 2D arrays. The x and y position
+        arrays must be the same shape as `img_data`.
+    guess_params : dict(str : float)
+        Dictionary of parameter guessed values.
+
+    Returns
+    -------
+    matplotlib.figure.Figure
+    """
 
     img_shape = np.shape(img_data)
     aspect_ratio = img_shape[0] / img_shape[1]
@@ -148,6 +207,43 @@ def guess_ring_params(
     show_plot: bool = False,
     log_plot: bool = False,
 ) -> dict[str, float]:
+    """
+    Generate reasonable parameter initial values with heuristics.
+
+    Parameter heuristics:
+
+        * ``A``: value of the brightest pixel
+        * ``C``: median pixel value
+        * ``X``, ``Y``: photocenter (center of mass)
+        * ``R``: distance from photocenter to brightest pixel
+        * ``sigma``: determine FWHM_(full ring) of 1D-collapsed profile,
+            then FWHM_(ring profile) ~ FWHM_(full ring)/2 - ``R``. Convert
+            FWHM to ``sigma``.
+
+    Several of these heuristics do not work if hot pixels are not removed
+    from `img_data`.
+
+    Parameters
+    ----------
+    img_data : 2D numpy array of real numbers
+        The data to be fit.
+    xy_grid : 3D numpy array of position for `img_data`
+        A numpy array containing the x and y positions of the `img_data`
+        values. The outer dimension should have length two, containing the
+        x and y positions as separate 2D arrays. The x and y position
+        arrays must be the same shape as `img_data`.
+    show_plot, log_plot : bool, default=False
+        Whether to show and/or log a plot visually showing the guessed values.
+
+    Returns
+    -------
+    dict(str : float)
+        Dictionary of parameter guesses.
+
+    See Also
+    --------
+    guess_plot : generate plot of image with guess values shown
+    """
 
     guess_params = dict()
 
@@ -197,6 +293,21 @@ def guess_ring_params(
 def plot_fit_strs(
     val_unc_params: dict[str, str],
 ) -> list[str]:
+    """
+    String together parameter values and uncertainties in the correct order.
+
+    Parameters
+    ----------
+    val_unc_params : dict(str : str)
+        Dictionary of parameter values and uncertainties. Dictionary values
+        are a string of the form "<value>+/-<uncertainty>" rounded to the
+        first significant figure of the uncertainty.
+
+    Returns
+    -------
+    list of strings
+        List of strings of the form "<name> = <value>+/-<uncertainty>".
+    """
     result_str_list = [
         f"{name} = {val_unc_params[name]}" for name in PARAMETERS_ORDERED
     ]
@@ -209,6 +320,33 @@ def plot_fit_result(
     img_data: RealNDArray,
     xygrid: RealNDArray,
 ) -> Figure:
+    """
+    Plot the image, the best fit, and the residuals side by side.
+
+    The image and the best fit share the same color map. Absolute residuals
+    are shown with an independent color map. The values of the best fit
+    parameters are shown in the upper righthand corner of the best fit plot.
+
+    Parameters
+    ----------
+    best_fit_params : dict(str : float)
+        Dictionary of initial parameter values.
+    unc_params : dict(str, str)
+        Parameter-name keyed dictionary containing a string of the best-fit
+        value and its uncertainty.
+    img_data : 2D numpy array of real numbers
+        Original image data to be plotted.
+    xy_grid : 3D numpy array of position for `img_data`
+        A numpy array containing the x and y positions of the `img_data`
+        values. The outer dimension should have length two, containing the
+        x and y positions as separate 2D arrays. The x and y position
+        arrays must be the same shape as `img_data`.
+
+    Returns
+    -------
+    matplotlib.figure.Figure
+        Generated figure of results.
+    """
     best_fit_values = [best_fit_params[name] for name in PARAMETERS_ORDERED]
     fit_data = gaussian_ring(xygrid, *best_fit_values)
     residuals = img_data - fit_data
@@ -265,6 +403,39 @@ def plot_fit_result(
 def calculate_weights(
     img_data: RealNDArray, guess_params: dict[str, float]
 ) -> RealNDArray:
+    r"""
+    Calculates weights for the pixel values based on Poissonian and pixel noise.
+
+    Uses the initial guess values for the R, X, and Y parameters to define
+    a box containing the ring. Pixels outside this box are used to
+    calculate the pixel noise. Pixel weights are calculated as the square
+    root of the sum of the squared Poisonnian noise and the square pixel noise.
+
+    $$ \sigma_\text{tot} = \sqrt{N + \sigma_\text{pix}^2} $$
+
+    Parameters
+    ----------
+    img_data : 2D numpy array of real numbers
+        Image data to calculate weights for.
+    guess_params : dict(str : float)
+        Dictionary of initial parameter values.
+
+    Returns
+    -------
+    2D numpy array of real numbers, same shape as `img_data`
+
+    See Also
+    --------
+    guess_ring_params : Guesses parameter initial values.
+    fit_gaussian_ring : Fit an image with a Gaussian ring.
+
+    Notes
+    -----
+    The box to contain the ring is centered on the initial guesses for the
+    ring's center (``X``, ``Y``), and has a side length of 3 times the
+    initial gess for the radius (``R``). This is a hueristic that relies on
+    the initial guesses being reasonable.
+    """
     # Use pixels to calculate background if they lie outside the box
     # centered on the photocenter with sidelength 3 times guessed radius
     img_shape = img_data.shape
@@ -303,6 +474,39 @@ def fit_gaussian_ring(
     show_plots: bool | tuple[bool, bool] = False,
     log_plots: bool | tuple[bool, bool] = True,
 ) -> lmfit.model.ModelResult:
+    """
+    Fits an image with a Gaussian ring using the lmfit package.
+
+    Can generate plots for the initial guess and the results of the fit.
+
+    Parameters
+    ----------
+    img_data : 2D numpy array of real numbers
+        The data to be fit.
+    show_plots, log_plots : bool or 2-tuple of bools, default=False
+        Choose to show and/or log the initial guess plot and/or the best
+        fit and residual results plot. Pass a pair of bools to control the
+        plots independently or a single bool to control both. Shown plots
+        must be closed before the function will continue.
+
+    Returns
+    -------
+    lmfit.model.ModelResult
+        The lmfit ``ModelResult`` object that results from the fit.
+
+    See Also
+    --------
+    guess_ring_params : Guesses parameter initial values.
+    calculate_weights : Calculates pixel weights from Poissonian and read noise.
+
+    Notes
+    -----
+    While fitting with a Gaussian ring is conceptually the simplest way to
+    analyze a ring, it is not the most efficient or robust way of doing so.
+    For fitting, weights are calculated by summing the expected poisonnian
+    noise and the pixel noise in quadrature (see `calculate_weights`). With
+    this, the uncertanties returned are meaningful.
+    """
     # duck typing
     if isinstance(show_plots, bool):
         show_plots = (show_plots, show_plots)
@@ -344,6 +548,9 @@ def fit_gaussian_ring(
 
 
 def run() -> None:
+    """
+    Simple script for development and testing.
+    """
     set_up_logging(log_to_console=True, log_to_file=True)
     global logger
     logger = get_logger(__name__)
