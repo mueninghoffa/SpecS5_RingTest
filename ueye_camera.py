@@ -25,28 +25,13 @@ except ModuleNotFoundError:
 #fmt: on
 
 from ctypes_to_normal import ctypes_to_normal
-from ueye_commands import (
-    PyUeyeError,
-    alloc_image_mem,
-    device_info,
-    event,
-    exit_camera,
-    exposure,
-    free_image_mem,
-    freeze_video,
-    get_camera_info,
-    get_camera_list,
-    get_number_of_cameras,
-    get_sensor_info,
-    init_camera,
-    pixel_clock,
-    set_auto_parameter,
-    set_color_mode,
-    set_external_trigger,
-    set_hardware_gain,
-    set_hardware_gamma,
-    set_image_mem,
-)
+from ueye_commands import (PyUeyeError, alloc_image_mem, device_info, event,
+                           exit_camera, exposure, free_image_mem, freeze_video,
+                           get_camera_info, get_camera_list,
+                           get_number_of_cameras, get_sensor_info, init_camera,
+                           pixel_clock, set_auto_parameter, set_color_mode,
+                           set_external_trigger, set_hardware_gain,
+                           set_hardware_gamma, set_image_mem)
 
 Ueye_Camera_List: TypeAlias = ueye.UEYE_CAMERA_LIST  # type: ignore
 Ueye_Color_Mode: TypeAlias = int
@@ -190,7 +175,6 @@ class UeyeCamera:
         self._height: Optional[int] = None
         self._serial_no: Optional[int] = None
 
-        self._connected = False
         self._connected = False
         self._last_exposure_time: Optional[datetime] = None
         self._image_available: Optional[ueye.c_uint] = None
@@ -495,14 +479,21 @@ class UeyeCamera:
         Notes
         -----
         There are only a discrete number of available exposure times. The
-        exposure time will be set to the closest one available. (The
-        spacing of available exposure times might be influenced by the pixel clock.)
+        exposure time will be set to the closest one available. This is
+        really only relevant with exposure times below a couple ms. (The
+        spacing of available exposure times might be influenced by the
+        pixel clock.)
 
         If setting the exposure time results in long exposure being enabled
         or disabled, this may temporarily disable the event frame loop (see
         `self.exposure`).
+
+        The cutoff for enabling long exposures is at 97 ms. I do not know
+        why that is the magic number. I thought it would be at 1000 ms,
+        but only a cutoff of 97 allows for the correct setting of the
+        exposure time for all values supported by the camera.
         """
-        if ms > 1e3:
+        if ms >= 97:
             enable = ueye.c_uint(1)
         else:
             enable = ueye.c_uint(0)
