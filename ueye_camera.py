@@ -4,6 +4,7 @@ Functions and a class for interacting with uEye cameras through pyueye.
 
 from __future__ import annotations
 
+import atexit
 import ctypes
 import time
 from datetime import datetime, timezone
@@ -190,7 +191,6 @@ class UeyeCamera:
         self._bits_per_pixel: Optional[int] = None
         self._serial_no: Optional[int] = None
 
-        self._connected = False
         self._last_exposure_time: Optional[datetime] = None
         self._image_available: Optional[ueye.c_uint] = None
         self._image_counter = 0
@@ -208,6 +208,9 @@ class UeyeCamera:
             return
 
         init_camera(self.handle, None)
+        self._connected = True
+        atexit.register(self._close)
+
         set_external_trigger(self.handle, ueye.IS_SET_TRIGGER_SOFTWARE)
         self._width = self.sensor_info["nMaxWidth"]
         self._height = self.sensor_info["nMaxHeight"]
@@ -222,7 +225,7 @@ class UeyeCamera:
         self._connected = True
         logger.info(
             f"Initialized camera model {self.sensor_info["strSensorName"]}"
-            + f"with camera ID {self.camera_info["Select"]}"
+            + f" with camera ID {self.camera_info["Select"]}"
         )
 
     def _enable_frame_event(self) -> None:
@@ -248,8 +251,7 @@ class UeyeCamera:
         Reserve memory for captured images.
         """
         assert self._connected, "Camera not initialized"
-        assert self._mem_ptr.value is None, "Memory pointer already assigned"
-        assert self._mem_id.value == 0, "Memory ID already assigned"
+        self.release_memory()  # clear any ghost allocations
         alloc_image_mem(
             self.handle,
             self._width,
@@ -265,25 +267,41 @@ class UeyeCamera:
         """
         Release memory allocated to camera.
         """
-        if self._mem_ptr.value is None and self._mem_id.value == 0:
-            logger.info("There is no memory to release")
+        if not self._mem_ptr.value and self._mem_id.value == 0:
+            logger.debug("Attempted to release memory when there is none allocated")
+            return
 
-        free_image_mem(self.handle, self._mem_ptr, self._mem_id)
-        self._mem_ptr = ueye.c_mem_p()
-        self._mem_id = ueye.c_int()
-        logger.debug("Camera memory released")
+        try:
+            free_image_mem(self.handle, self._mem_ptr, self._mem_id)
+            logger.debug("Released camera memory")
+        except Exception as e:
+            logger.error(f"Failed to release camera memory: {e}")
+        finally:
+            self._mem_ptr = ueye.c_mem_p()
+            self._mem_id = ueye.c_int()
 
     def _close(self) -> None:
         """
-        Close camera connection, if possible.
+        Close camera and release memory, if possible.
         """
         if not self._connected:
-            logger.warning("Cannot disconnect from an unconnected camera")
+            logger.info("Attempted to close camera when it was already closed")
             return
 
-        exit_camera(self.handle)
+        try:
+            self.release_memory()
+        except Exception as e:
+            logger.error(f"Error releasing memory: {e}")
 
-        self._connected = False
+        try:
+            if self.handle:
+                exit_camera(self.handle)
+        except Exception as e:
+            logger.error(f"Error disconnecting from camera: {e}")
+        finally:
+            self._connected = False
+            self.handle = ueye.HIDS(0)
+
         logger.debug("Camera disconnected")
         return
 
@@ -298,6 +316,7 @@ class UeyeCamera:
         logger.debug("Entered context")
         self._connect()
         self._enable_frame_event()
+        self.reserve_memory()
         return self
 
     def __exit__(self, _, __, ___) -> bool:
@@ -312,10 +331,19 @@ class UeyeCamera:
         _ = __, ___  # shut up pyright
 
         logger.debug("Exited context")
-        if self._connected:
-            self.release_memory()
-            self._close()
+        self._close()
         return False
+
+    def __del__(self) -> None:
+        """
+        Final safeguard to release hardware if the object is garbage collected.
+        """
+        try:
+            if hasattr(self, "_connected") and self._connected:
+                self._close()
+        except Exception:
+            # Destructors should never raise exceptions
+            pass
 
     # ---- Hardware Information ----
 
