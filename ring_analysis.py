@@ -107,9 +107,9 @@ def guess_plot(
     img_shape = np.shape(img_data)
     aspect_ratio = img_shape[0] / img_shape[1]
     fig, ax = plt.subplots(figsize=(5 / aspect_ratio + 2, 5))
-    mesh = plt.pcolormesh(*xygrid, img_data, shading="nearest")
+    img = plt.imshow(img_data)
     # shading='nearest' centers squares on img_data points
-    cbar = plt.colorbar(mesh)
+    cbar = plt.colorbar(img)
     cbar.set_label("Pixel & Best Fit values", fontsize=14)
 
     # location of brightest pixel (A guess)
@@ -127,7 +127,7 @@ def guess_plot(
     )
 
     # C-guess colored square
-    C_guess_color = mesh.cmap(mesh.norm(guess_params["C"]))
+    C_guess_color = img.cmap(img.norm(guess_params["C"]))
     rect_w, rect_h = 0.15, 0.15
     rect_x, rect_y = 1 - rect_w, 0
     rect = patches.Rectangle(
@@ -362,12 +362,10 @@ def plot_fit_result(
     )
     vmin = min(img_data.min(), fit_data.min())
     vmax = max(img_data.max(), fit_data.max())
-    axs[0].pcolormesh(*xygrid, img_data, shading="nearest", vmin=vmin, vmax=vmax)
-    fit_c = axs[2].pcolormesh(
-        *xygrid, fit_data, shading="nearest", vmin=vmin, vmax=vmax
-    )
+    axs[0].imshow(img_data, vmin=vmin, vmax=vmax)
+    fit_c = axs[2].imshow(fit_data, vmin=vmin, vmax=vmax)
     fig.colorbar(fit_c, cax=axs[1])
-    resid_c = axs[3].pcolormesh(*xygrid, residuals, shading="nearest")
+    resid_c = axs[3].imshow(residuals)
     fig.colorbar(resid_c, cax=axs[4])
 
     # best fit values and uncertainties
