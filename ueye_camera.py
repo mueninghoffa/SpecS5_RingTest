@@ -188,9 +188,10 @@ class UeyeCamera:
 
         self._width: Optional[int] = None
         self._height: Optional[int] = None
-        self._bits_per_pixel: Optional[int] = None
         self._serial_no: Optional[int] = None
 
+        self._connected = False
+        self._connected = False
         self._last_exposure_time: Optional[datetime] = None
         self._image_available: Optional[ueye.c_uint] = None
         self._image_counter = 0
@@ -222,7 +223,9 @@ class UeyeCamera:
         self.save_dir = self.save_dir / f"{date_str}_{self._serial_no}"
         self.dark_library = self.dark_library / f"{self._serial_no}"
 
-        self._connected = True
+        if self.sensor_info["nColorMode"][0] == 1:
+            self.color_mode = ueye.IS_CM_MONO8
+
         logger.info(
             f"Initialized camera model {self.sensor_info["strSensorName"]}"
             + f" with camera ID {self.camera_info["Select"]}"
@@ -256,7 +259,7 @@ class UeyeCamera:
             self.handle,
             self._width,
             self._height,
-            self._bits_per_pixel,
+            self.bits_per_pixel,
             self._mem_ptr,
             self._mem_id,
         )
@@ -614,7 +617,7 @@ class UeyeCamera:
         There are only a discrete number of pixel clock values available.
         The camera is set to which valid value is closest to `mhz`.
         """
-        value = ueye.int(mhz)
+        value = ueye.uint(mhz)
         pixel_clock(
             self.handle,
             ueye.IS_PIXELCLOCK_CMD_SET,
@@ -622,7 +625,7 @@ class UeyeCamera:
             ueye.sizeof(value),
         )
 
-        actual_value = ueye.INT()
+        actual_value = ueye.UINT()
         pixel_clock(
             self.handle,
             ueye.IS_PIXELCLOCK_CMD_GET,
@@ -682,10 +685,28 @@ class UeyeCamera:
         """
         return set_color_mode(self.handle, ueye.IS_GET_COLOR_MODE)
 
+    @property
+    def bits_per_pixel(self) -> int:
+        """
+        Get the number of bits used to store each pixel value.
+
+        Returns
+        -------
+        int
+            Bits per pixel.
+
+        Notes
+        -----
+        This depends on the color mode.
+        """
+        return set_color_mode(self.handle, ueye.IS_GET_BITS_PER_PIXEL)
+
     @color_mode.setter
     def color_mode(self, mode: Ueye_Color_Mode) -> None:
         """
         Set the color mode.
+
+        Changes reserved memory to match new bits per pixel.
 
         Parameters
         ----------
@@ -701,10 +722,12 @@ class UeyeCamera:
             documentation for the full list.
         """
         set_color_mode(self.handle, mode)
-        self._bits_per_pixel = set_color_mode(self.handle, ueye.IS_GET_BITS_PER_PIXEL)
         logger.debug(
             f"Color mode set to {mode}"
         )  # should be updated to log literal name, not int
+
+        self.release_memory()
+        self.reserve_memory()
 
     # ---- Configuration (non-properties) ----
 
@@ -990,13 +1013,20 @@ class UeyeCamera:
         assert self._last_exposure_time is not None, "No image available"
         assert isinstance(self._width, int)
         assert isinstance(self._height, int)
-        assert isinstance(self._bits_per_pixel, int)
 
-        total_bytes = self._width * self._height * ((self._bits_per_pixel + 7) // 8)
+        bytes_per_pixel = int(self.bits_per_pixel / 8)
+        total_bytes = self._width * self._height * bytes_per_pixel
+
+        if bytes_per_pixel == 1:
+            dtype = np.uint8
+        elif bytes_per_pixel == 2:
+            dtype = np.uint16
+        else:
+            raise ValueError(f"bytes_per_pixel is {bytes_per_pixel}, not 1 or 2")
 
         # accessing _mem_ptr without allocation will cause a hard crash
         buffer = ctypes.string_at(self._mem_ptr, total_bytes)
-        arr = np.copy(np.frombuffer(buffer, dtype=np.int16))
+        arr = np.copy(np.frombuffer(buffer, dtype=dtype)).astype(np.int16)
         img = arr.reshape((self._height, self._width))
 
         if subtract:
@@ -1039,7 +1069,7 @@ class UeyeCamera:
 
         # header["WIDTH"] = self._width
         # header["HEIGHT"] = self._height
-        header["SBITPIX"] = self._bits_per_pixel, "significant bits per pixel"
+        header["SBITPIX"] = self.bits_per_pixel, "significant bits per pixel"
         header["PIXSIZE"] = sensor_info["wPixelSize"] / 1e2, "microns"
         header["GLOBSHUT"] = bool(sensor_info["bGlobShutter"]), "global shutter"
 
